@@ -1,0 +1,3055 @@
+<!DOCTYPE html>
+<html lang="en" class="dark h-full">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="referrer" content="strict-origin-when-cross-origin" />
+  <meta name="description" content="Pages Pilot — securely deploy static HTML to GitHub Pages from a single-file enterprise dashboard." />
+  <title>Pages Pilot — GitHub Pages Deployment Console</title>
+
+  <!--
+    Managed configuration (admin panel integration).
+
+    This file never ships administrative controls. Runtime configuration is
+    supplied by the separate admin application in one of two ways:
+
+      1. window.PAGES_PILOT_CONFIG = { clientId, brokerUrl, scope, remember }
+         injected by a script that runs before this application bundle, or
+
+      2. a JSON document referenced by the meta tag below, e.g.
+         <meta name="pages-pilot-config" content="/pages-pilot.config.json" />
+
+    Both are merged over any locally cached values. Only non-secret, public
+    values are accepted here — the GitHub client secret never leaves the broker.
+  -->
+  <meta name="pages-pilot-config" content="" />
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['ui-sans-serif', 'system-ui', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'Helvetica Neue', 'Arial', 'sans-serif']
+          },
+          boxShadow: {
+            glow: '0 0 0 1px rgba(16,185,129,.14), 0 30px 80px -30px rgba(16,185,129,.25)'
+          }
+        }
+      },
+      safelist: [
+        'bg-emerald-500/10','text-emerald-300','ring-emerald-500/20','ring-emerald-400/30',
+        'bg-amber-500/10','text-amber-300','ring-amber-500/20','ring-amber-400/30',
+        'bg-rose-500/10','text-rose-300','ring-rose-500/20','ring-rose-400/30',
+        'bg-slate-500/10','text-slate-300','ring-slate-500/20',
+        'bg-white/5','text-slate-400','ring-white/10',
+        'bg-cyan-500/10','text-cyan-300','ring-cyan-400/30',
+        'bg-emerald-400','bg-amber-400','bg-rose-400',
+        'bg-emerald-500/10','text-emerald-300','bg-amber-500/10','text-amber-300',
+        'bg-rose-500/10','text-rose-300'
+      ]
+    };
+  </script>
+
+  <style>
+    html { scroll-behavior: smooth; color-scheme: dark; }
+    body { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+    ::selection { background: rgba(16,185,129,.28); color: #fff; }
+    .scrollbar-thin::-webkit-scrollbar { width: 7px; height: 7px; }
+    .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+    .scrollbar-thin::-webkit-scrollbar-thumb { background: rgba(148,163,184,.22); border-radius: 999px; }
+    .scrollbar-thin::-webkit-scrollbar-thumb:hover { background: rgba(148,163,184,.36); }
+    @keyframes toastIn { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+    .toast-in { animation: toastIn .18s ease-out both; }
+    .modal-backdrop { animation: fadeIn .15s ease-out both; }
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    .focus-ring:focus-visible { outline: 2px solid #34d399; outline-offset: 2px; }
+    [data-icon] { display: inline-flex; align-items: center; justify-content: center; }
+
+    /*
+      Administrative surfaces are owned by the separate admin application.
+      They stay in the document (so the logic behind them is untouched) but are
+      never rendered, never focusable, and never reachable for end users.
+    */
+    [data-admin] { display: none !important; }
+  </style>
+</head>
+
+<body class="h-full bg-slate-950 font-sans text-slate-200 antialiased selection:bg-emerald-500/30">
+
+  <!-- ============================================================ -->
+  <!-- AUTH SCREEN                                                   -->
+  <!-- ============================================================ -->
+  <div id="authScreen" class="relative min-h-screen overflow-hidden">
+    <div class="pointer-events-none absolute inset-0">
+      <div class="absolute -right-40 -top-40 h-[520px] w-[520px] rounded-full bg-emerald-500/10 blur-3xl"></div>
+      <div class="absolute -bottom-48 -left-40 h-[520px] w-[520px] rounded-full bg-cyan-500/10 blur-3xl"></div>
+      <div class="absolute left-1/2 top-1/3 h-72 w-72 -translate-x-1/2 rounded-full bg-emerald-400/5 blur-3xl"></div>
+    </div>
+
+    <header class="relative mx-auto flex max-w-6xl items-center justify-between px-6 py-6">
+      <a href="#" class="flex items-center gap-3" aria-label="Pages Pilot home">
+        <span class="grid h-10 w-10 place-items-center rounded-xl bg-emerald-500/10 text-emerald-300 ring-1 ring-emerald-400/30">
+          <span data-icon="rocket" data-icon-class="h-5 w-5"></span>
+        </span>
+        <span>
+          <span class="block text-sm font-semibold tracking-tight text-white">Pages Pilot</span>
+          <span class="block text-[11px] text-slate-400">GitHub Pages deployment console</span>
+        </span>
+      </a>
+      <button id="authSetupBtn" data-admin class="focus-ring inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3.5 py-2 text-xs font-medium text-slate-300 transition hover:bg-white/10 hover:text-white">
+        <span data-icon="settings" data-icon-class="h-4 w-4"></span>
+        Setup
+      </button>
+    </header>
+
+    <main class="relative mx-auto grid max-w-6xl gap-14 px-6 pb-20 pt-8 lg:grid-cols-[1.08fr_.92fr] lg:items-center lg:pt-16">
+      <section>
+        <div class="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[.18em] text-emerald-300">
+          <span class="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>
+          Static delivery, automated
+        </div>
+
+        <h1 class="mt-6 max-w-2xl text-4xl font-semibold tracking-[-0.04em] text-white sm:text-5xl lg:text-6xl">
+          Ship HTML to a
+          <span class="bg-gradient-to-r from-emerald-300 via-emerald-400 to-cyan-300 bg-clip-text text-transparent">live GitHub Pages URL</span>
+          in one pass.
+        </h1>
+
+        <p class="mt-6 max-w-xl text-base leading-7 text-slate-400">
+          Connect GitHub, drop an HTML file, and Pages Pilot creates the repository, commits the file, enables Pages, and returns a shareable URL — with every API call paced and protected.
+        </p>
+
+        <div class="mt-8 grid max-w-xl gap-3 sm:grid-cols-2">
+          <div class="flex items-start gap-3 rounded-xl border border-white/5 bg-white/[.025] p-3.5">
+            <span class="mt-0.5 text-emerald-300" data-icon="shield" data-icon-class="h-5 w-5"></span>
+            <div>
+              <p class="text-sm font-medium text-white">OAuth + PKCE</p>
+              <p class="mt-0.5 text-xs leading-5 text-slate-400">State validation, S256 challenge, and broker-held client secret.</p>
+            </div>
+          </div>
+          <div class="flex items-start gap-3 rounded-xl border border-white/5 bg-white/[.025] p-3.5">
+            <span class="mt-0.5 text-emerald-300" data-icon="refresh" data-icon-class="h-5 w-5"></span>
+            <div>
+              <p class="text-sm font-medium text-white">Rate-limit aware</p>
+              <p class="mt-0.5 text-xs leading-5 text-slate-400">Serial queue, Retry-After handling, and budget preflight checks.</p>
+            </div>
+          </div>
+          <div class="flex items-start gap-3 rounded-xl border border-white/5 bg-white/[.025] p-3.5">
+            <span class="mt-0.5 text-emerald-300" data-icon="repo" data-icon-class="h-5 w-5"></span>
+            <div>
+              <p class="text-sm font-medium text-white">Repo automation</p>
+              <p class="mt-0.5 text-xs leading-5 text-slate-400">Creates a user-specific repository and commits index.html.</p>
+            </div>
+          </div>
+          <div class="flex items-start gap-3 rounded-xl border border-white/5 bg-white/[.025] p-3.5">
+            <span class="mt-0.5 text-emerald-300" data-icon="link" data-icon-class="h-5 w-5"></span>
+            <div>
+              <p class="text-sm font-medium text-white">Live URL + copy</p>
+              <p class="mt-0.5 text-xs leading-5 text-slate-400">Pages activation and one-click clipboard actions.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="mt-6 flex max-w-xl items-start gap-3 rounded-xl border border-amber-400/15 bg-amber-500/[.06] p-4">
+          <span class="mt-0.5 shrink-0 text-amber-300" data-icon="lock" data-icon-class="h-5 w-5"></span>
+          <p class="text-xs leading-5 text-amber-100/80">
+            <strong class="font-semibold text-amber-200">Security architecture:</strong>
+            this single-file client never contains a GitHub client secret. It exchanges the OAuth code through a broker you control. Never ship a client secret in browser code.
+          </p>
+        </div>
+      </section>
+
+      <section class="lg:pl-4">
+        <div class="relative overflow-hidden rounded-3xl border border-white/10 bg-slate-900/60 p-6 shadow-2xl backdrop-blur-xl sm:p-8">
+          <div class="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-emerald-400/40 to-transparent"></div>
+
+          <div class="flex items-center justify-between gap-3">
+            <div class="flex items-center gap-2.5">
+              <span class="grid h-9 w-9 place-items-center rounded-xl bg-white/5 text-white ring-1 ring-white/10">
+                <span data-icon="github" data-icon-class="h-5 w-5"></span>
+              </span>
+              <div>
+                <p class="text-sm font-semibold text-white">GitHub connection</p>
+                <p class="text-[11px] text-slate-400">Least-privilege repository access</p>
+              </div>
+            </div>
+            <span id="authOauthState" class="inline-flex items-center rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-300">Checking…</span>
+          </div>
+
+          <h2 class="mt-7 text-2xl font-semibold tracking-tight text-white">Connect your account</h2>
+          <p class="mt-2 text-sm leading-6 text-slate-400">
+            Sign in with GitHub OAuth. Pages Pilot requests only the scope needed to create a public repository, commit files, and enable Pages.
+          </p>
+
+          <button id="authOauthBtn" type="button" class="focus-ring mt-6 flex w-full items-center justify-center gap-2.5 rounded-xl bg-white px-4 py-3 text-sm font-semibold text-slate-950 shadow-lg transition hover:bg-emerald-50 active:scale-[.99]">
+            <span data-icon="github" data-icon-class="h-5 w-5"></span>
+            <span id="authOauthBtnText">Continue with GitHub</span>
+          </button>
+
+          <p id="authBrokerHint" data-admin class="mt-3 text-center text-[11px] leading-5 text-slate-500"></p>
+
+          <div data-admin class="my-6 flex items-center gap-3">
+            <div class="h-px flex-1 bg-white/10"></div>
+            <span class="text-[10px] font-semibold uppercase tracking-[.16em] text-slate-600">or</span>
+            <div class="h-px flex-1 bg-white/10"></div>
+          </div>
+
+          <button id="authPatBtn" data-admin type="button" class="focus-ring flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[.03] px-4 py-3 text-sm font-medium text-slate-300 transition hover:bg-white/[.06] hover:text-white">
+            <span data-icon="key" data-icon-class="h-4 w-4"></span>
+            Use a personal access token
+          </button>
+
+          <div data-admin class="mt-6 rounded-xl border border-white/5 bg-black/20 p-3.5">
+            <p class="text-[10px] font-semibold uppercase tracking-[.16em] text-slate-500">OAuth redirect URI</p>
+            <div class="mt-1.5 flex items-start justify-between gap-2">
+              <code id="authRedirectUri" class="break-all text-[11px] leading-5 text-slate-300">—</code>
+              <button type="button" data-action="copy-redirect" class="shrink-0 rounded-md p-1 text-slate-500 transition hover:bg-white/10 hover:text-white" aria-label="Copy redirect URI">
+                <span data-icon="copy" data-icon-class="h-4 w-4"></span>
+              </button>
+            </div>
+          </div>
+
+          <p class="mt-5 text-center text-[10px] leading-5 text-slate-600">
+            Tokens are kept securely in this browser and refreshed automatically. Client secrets stay server-side in your OAuth broker.
+          </p>
+        </div>
+
+        <div data-admin class="mt-4 flex items-start gap-3 rounded-2xl border border-white/5 bg-white/[.02] p-4">
+          <span class="mt-0.5 shrink-0 text-slate-500" data-icon="info" data-icon-class="h-4 w-4"></span>
+          <p class="text-[11px] leading-5 text-slate-500">
+            GitHub does not allow browser-only token exchange with a client secret. Configure the broker in <button type="button" id="authBrokerHelpBtn" class="font-medium text-emerald-300 underline decoration-emerald-400/30 underline-offset-2 hover:text-emerald-200">Setup</button> to enable secure OAuth. A PAT is available for local testing.
+          </p>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- DASHBOARD                                                     -->
+  <!-- ============================================================ -->
+  <div id="dashboard" class="hidden min-h-screen">
+    <!-- Mobile sidebar backdrop -->
+    <div id="sidebarBackdrop" class="fixed inset-0 z-30 hidden bg-slate-950/80 backdrop-blur-sm lg:hidden"></div>
+
+    <!-- Sidebar -->
+    <aside id="sidebar" class="fixed inset-y-0 left-0 z-40 flex w-64 -translate-x-full flex-col border-r border-white/10 bg-slate-950/95 backdrop-blur-xl transition-transform duration-200 ease-out lg:translate-x-0">
+      <div class="flex h-16 items-center gap-3 border-b border-white/5 px-5">
+        <span class="grid h-9 w-9 place-items-center rounded-xl bg-emerald-500/10 text-emerald-300 ring-1 ring-emerald-400/30">
+          <span data-icon="rocket" data-icon-class="h-5 w-5"></span>
+        </span>
+        <div class="min-w-0">
+          <p class="truncate text-sm font-semibold tracking-tight text-white">Pages Pilot</p>
+          <p class="truncate text-[10px] uppercase tracking-[.16em] text-slate-500">Deployment console</p>
+        </div>
+      </div>
+
+      <nav class="flex-1 space-y-1 overflow-y-auto px-3 py-5 scrollbar-thin" aria-label="Primary">
+        <p class="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[.18em] text-slate-600">Workspace</p>
+        <a href="#overview" data-nav class="focus-ring flex items-center gap-3 rounded-xl bg-white/[.06] px-3 py-2.5 text-sm font-medium text-white ring-1 ring-white/5 transition hover:bg-white/[.09]">
+          <span class="text-emerald-300" data-icon="chart" data-icon-class="h-4 w-4"></span>
+          Overview
+        </a>
+        <a href="#deployments" data-nav class="focus-ring flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-slate-400 transition hover:bg-white/5 hover:text-white">
+          <span data-icon="repo" data-icon-class="h-4 w-4"></span>
+          Deployments
+          <span id="sidebarDeployCount" class="ml-auto rounded-md bg-white/5 px-1.5 py-0.5 text-[10px] font-semibold text-slate-400">0</span>
+        </a>
+        <a href="#activity" data-nav class="focus-ring flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-slate-400 transition hover:bg-white/5 hover:text-white">
+          <span data-icon="clock" data-icon-class="h-4 w-4"></span>
+          Activity
+        </a>
+
+        <p data-admin class="px-3 pb-2 pt-6 text-[10px] font-semibold uppercase tracking-[.18em] text-slate-600">Configuration</p>
+        <button type="button" data-admin data-action="open-settings" class="focus-ring flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-medium text-slate-400 transition hover:bg-white/5 hover:text-white">
+          <span data-icon="settings" data-icon-class="h-4 w-4"></span>
+          Connection settings
+        </button>
+        <button type="button" data-admin data-action="open-broker" class="focus-ring flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-medium text-slate-400 transition hover:bg-white/5 hover:text-white">
+          <span data-icon="book" data-icon-class="h-4 w-4"></span>
+          Broker setup
+        </button>
+      </nav>
+
+      <div class="border-t border-white/5 p-3">
+        <div class="rounded-xl border border-white/5 bg-white/[.025] p-3">
+          <div class="flex items-center gap-2.5">
+            <img data-avatar src="" alt="" class="h-8 w-8 rounded-full bg-slate-800 ring-1 ring-white/10" />
+            <div class="min-w-0 flex-1">
+              <p id="userName" class="truncate text-xs font-semibold text-white">—</p>
+              <p id="userLogin" class="truncate text-[10px] text-slate-500">@—</p>
+            </div>
+            <button type="button" data-action="signout" class="rounded-md p-1.5 text-slate-500 transition hover:bg-white/10 hover:text-rose-300" aria-label="Disconnect GitHub" title="Disconnect">
+              <span data-icon="logout" data-icon-class="h-4 w-4"></span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main column -->
+    <div class="lg:pl-64">
+      <!-- Top bar -->
+      <header class="sticky top-0 z-20 border-b border-white/5 bg-slate-950/80 backdrop-blur-xl">
+        <div class="mx-auto flex h-16 max-w-7xl items-center gap-3 px-4 sm:px-6 lg:px-8">
+          <button id="mobileMenuBtn" type="button" class="focus-ring rounded-lg p-2 text-slate-400 transition hover:bg-white/5 hover:text-white lg:hidden" aria-label="Open navigation">
+            <span data-icon="menu" data-icon-class="h-5 w-5"></span>
+          </button>
+
+          <div class="hidden items-center gap-2 text-xs text-slate-500 sm:flex">
+            <span>Workspace</span>
+            <span data-icon="chevron" data-icon-class="h-3.5 w-3.5"></span>
+            <span class="font-medium text-slate-300">Overview</span>
+          </div>
+
+          <div class="ml-auto flex items-center gap-2">
+            <button id="rateBadge" type="button" data-action="open-rate" class="focus-ring inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] font-medium transition hover:bg-white/10" title="GitHub API rate limit">
+              <span id="rateDot" class="h-2 w-2 rounded-full bg-slate-500"></span>
+              <span id="rateBadgeText" class="text-slate-300">API —</span>
+            </button>
+
+            <button type="button" data-admin data-action="open-settings" class="focus-ring rounded-lg p-2 text-slate-400 transition hover:bg-white/5 hover:text-white" aria-label="Open settings">
+              <span data-icon="settings" data-icon-class="h-5 w-5"></span>
+            </button>
+
+            <div class="ml-1 flex items-center gap-2 rounded-full border border-white/10 bg-white/5 py-1 pl-1 pr-2.5">
+              <img data-avatar src="" alt="" class="h-7 w-7 rounded-full bg-slate-800 ring-1 ring-white/10" />
+              <span id="topbarUserName" class="hidden max-w-[110px] truncate text-[11px] font-medium text-slate-300 sm:block">—</span>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main id="overview" class="mx-auto max-w-7xl space-y-8 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+        <!-- Page heading -->
+        <section class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <div class="flex items-center gap-2">
+              <span class="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-emerald-300 ring-1 ring-emerald-400/20">
+                <span class="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>
+                Operational
+              </span>
+              <span class="text-[11px] text-slate-600">GitHub Pages control plane</span>
+            </div>
+            <h1 class="mt-3 text-2xl font-semibold tracking-tight text-white sm:text-3xl">Deployment overview</h1>
+            <p class="mt-1.5 max-w-2xl text-sm text-slate-400">Create a repository, publish an HTML file, and activate a live Pages URL without leaving this console.</p>
+          </div>
+          <a href="#deployForm" class="focus-ring inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-slate-950 shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-400 active:scale-[.99]">
+            <span data-icon="upload" data-icon-class="h-4 w-4"></span>
+            New deployment
+          </a>
+        </section>
+
+        <!-- Stats -->
+        <section class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4" aria-label="Summary">
+          <div class="rounded-2xl border border-white/10 bg-slate-900/40 p-5 shadow-lg shadow-black/10">
+            <div class="flex items-center justify-between">
+              <p class="text-xs font-medium text-slate-400">Deployments</p>
+              <span class="grid h-8 w-8 place-items-center rounded-lg bg-white/5 text-slate-400 ring-1 ring-white/10" data-icon="repo" data-icon-class="h-4 w-4"></span>
+            </div>
+            <p id="statDeployments" class="mt-3 text-3xl font-semibold tracking-tight text-white">0</p>
+            <p class="mt-1 text-[11px] text-slate-500">Tracked in this workspace</p>
+          </div>
+          <div class="rounded-2xl border border-white/10 bg-slate-900/40 p-5 shadow-lg shadow-black/10">
+            <div class="flex items-center justify-between">
+              <p class="text-xs font-medium text-slate-400">Live sites</p>
+              <span class="grid h-8 w-8 place-items-center rounded-lg bg-emerald-500/10 text-emerald-300 ring-1 ring-emerald-400/20" data-icon="link" data-icon-class="h-4 w-4"></span>
+            </div>
+            <p id="statLive" class="mt-3 text-3xl font-semibold tracking-tight text-white">0</p>
+            <p class="mt-1 text-[11px] text-slate-500">Pages builds completed</p>
+          </div>
+          <div class="rounded-2xl border border-white/10 bg-slate-900/40 p-5 shadow-lg shadow-black/10">
+            <div class="flex items-center justify-between">
+              <p class="text-xs font-medium text-slate-400">Repositories</p>
+              <span class="grid h-8 w-8 place-items-center rounded-lg bg-cyan-500/10 text-cyan-300 ring-1 ring-cyan-400/20" data-icon="github" data-icon-class="h-4 w-4"></span>
+            </div>
+            <p id="statRepos" class="mt-3 text-3xl font-semibold tracking-tight text-white">0</p>
+            <p class="mt-1 text-[11px] text-slate-500">Unique repositories</p>
+          </div>
+          <div class="rounded-2xl border border-white/10 bg-slate-900/40 p-5 shadow-lg shadow-black/10">
+            <div class="flex items-center justify-between">
+              <p class="text-xs font-medium text-slate-400">API remaining</p>
+              <span class="grid h-8 w-8 place-items-center rounded-lg bg-amber-500/10 text-amber-300 ring-1 ring-amber-400/20" data-icon="chart" data-icon-class="h-4 w-4"></span>
+            </div>
+            <p id="statRate" class="mt-3 text-3xl font-semibold tracking-tight text-white">—</p>
+            <p class="mt-1 text-[11px] text-slate-500">Authenticated quota</p>
+          </div>
+        </section>
+
+        <div class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
+          <!-- Deploy form -->
+          <section class="rounded-2xl border border-white/10 bg-slate-900/40 shadow-xl shadow-black/10">
+            <div class="flex items-start justify-between gap-4 border-b border-white/5 p-5 sm:p-6">
+              <div>
+                <h2 class="text-base font-semibold tracking-tight text-white">Deploy a static site</h2>
+                <p class="mt-1 text-xs leading-5 text-slate-400">Upload one HTML file. It will be published as <code class="rounded bg-white/5 px-1 py-0.5 text-[11px] text-slate-300">index.html</code> at the repository root.</p>
+              </div>
+              <span class="hidden shrink-0 rounded-full bg-emerald-500/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-emerald-300 ring-1 ring-emerald-400/20 sm:inline-flex">Public Pages</span>
+            </div>
+
+            <form id="deployForm" class="space-y-5 p-5 sm:p-6">
+              <!-- Dropzone -->
+              <div id="dropzone" role="button" tabindex="0" aria-label="Choose or drop an HTML file" class="focus-ring group relative flex min-h-[184px] cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-white/15 bg-slate-950/40 px-6 py-8 text-center transition hover:border-emerald-400/40 hover:bg-emerald-500/[.03]">
+                <input id="fileInput" type="file" accept=".html,.htm,text/html" class="sr-only" />
+                <div class="grid h-12 w-12 place-items-center rounded-2xl bg-white/5 text-slate-300 ring-1 ring-white/10 transition group-hover:bg-emerald-500/10 group-hover:text-emerald-300 group-hover:ring-emerald-400/20">
+                  <span data-icon="upload" data-icon-class="h-6 w-6"></span>
+                </div>
+                <p class="mt-4 text-sm font-medium text-white">Drop your HTML file here</p>
+                <p class="mt-1 text-xs text-slate-500">or click to browse · .html / .htm · max 8 MB</p>
+                <p class="mt-3 rounded-full bg-white/5 px-2.5 py-1 text-[10px] font-medium text-slate-500">The file never leaves your browser except to GitHub</p>
+              </div>
+
+              <!-- Selected file -->
+              <div id="selectedFile" class="hidden items-center gap-3 rounded-xl border border-emerald-400/20 bg-emerald-500/[.05] p-3.5">
+                <span class="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-emerald-500/10 text-emerald-300 ring-1 ring-emerald-400/20" data-icon="file" data-icon-class="h-5 w-5"></span>
+                <div class="min-w-0 flex-1">
+                  <p id="selectedFileName" class="truncate text-sm font-medium text-white">—</p>
+                  <p class="mt-0.5 text-[11px] text-slate-400"><span id="selectedFileSize">—</span> · will publish as index.html</p>
+                </div>
+                <button type="button" id="removeFileBtn" class="focus-ring rounded-lg p-2 text-slate-400 transition hover:bg-white/10 hover:text-rose-300" aria-label="Remove selected file">
+                  <span data-icon="x" data-icon-class="h-4 w-4"></span>
+                </button>
+              </div>
+
+              <!-- Repo name -->
+              <div>
+                <div class="flex items-center justify-between gap-2">
+                  <label for="repoName" class="text-xs font-medium text-slate-300">Repository name</label>
+                  <button type="button" id="generateRepoBtn" class="focus-ring inline-flex items-center gap-1 text-[11px] font-medium text-emerald-300 transition hover:text-emerald-200">
+                    <span data-icon="sparkles" data-icon-class="h-3.5 w-3.5"></span>
+                    Generate
+                  </button>
+                </div>
+                <div class="mt-2 flex items-center rounded-xl border border-white/10 bg-slate-950/50 focus-within:border-emerald-400/40">
+                  <span class="pl-3 text-slate-500" data-icon="repo" data-icon-class="h-4 w-4"></span>
+                  <input id="repoName" type="text" maxlength="100" autocomplete="off" spellcheck="false" placeholder="my-pages-site" class="w-full bg-transparent px-2.5 py-3 text-sm text-white placeholder:text-slate-600 focus:outline-none" />
+                </div>
+                <p class="mt-1.5 text-[11px] text-slate-500">Lowercase letters, numbers, hyphens, dots, and underscores only.</p>
+              </div>
+
+              <!-- Visibility -->
+              <div class="flex items-start gap-3 rounded-xl border border-white/5 bg-white/[.02] p-3.5">
+                <span class="mt-0.5 text-slate-400" data-icon="lock" data-icon-class="h-4 w-4"></span>
+                <div>
+                  <p class="text-xs font-medium text-slate-300">Public repository</p>
+                  <p class="mt-0.5 text-[11px] leading-5 text-slate-500">Required for free GitHub Pages. The generated site is publicly accessible to anyone with the URL.</p>
+                </div>
+              </div>
+
+              <!-- Deploy button -->
+              <button id="deployBtn" type="submit" class="focus-ring flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-3.5 text-sm font-semibold text-slate-950 shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-400 active:scale-[.995] disabled:cursor-not-allowed disabled:opacity-60">
+                <span id="deploySpinner" class="hidden" data-icon="loader" data-icon-class="h-4 w-4 animate-spin"></span>
+                <span data-icon="rocket" data-icon-class="h-4 w-4"></span>
+                <span id="deployBtnText">Deploy to GitHub Pages</span>
+              </button>
+
+              <!-- Pipeline -->
+              <div id="pipeline" class="hidden rounded-2xl border border-white/10 bg-slate-950/50 p-4">
+                <div class="mb-4 flex items-center justify-between">
+                  <p class="text-[10px] font-semibold uppercase tracking-[.16em] text-slate-500">Deployment pipeline</p>
+                  <span class="text-[10px] text-slate-600">Serialized API calls</span>
+                </div>
+                <div class="grid gap-3 sm:grid-cols-2">
+                  <div class="flex items-start gap-3" data-step="repo">
+                    <span class="step-icon grid h-8 w-8 shrink-0 place-items-center rounded-full bg-white/5 text-slate-400 ring-1 ring-white/10"></span>
+                    <div class="min-w-0">
+                      <p class="text-xs font-medium text-slate-200">Repository</p>
+                      <p class="step-detail mt-0.5 text-[11px] text-slate-500">Waiting</p>
+                    </div>
+                  </div>
+                  <div class="flex items-start gap-3" data-step="upload">
+                    <span class="step-icon grid h-8 w-8 shrink-0 place-items-center rounded-full bg-white/5 text-slate-400 ring-1 ring-white/10"></span>
+                    <div class="min-w-0">
+                      <p class="text-xs font-medium text-slate-200">Upload file</p>
+                      <p class="step-detail mt-0.5 text-[11px] text-slate-500">Waiting</p>
+                    </div>
+                  </div>
+                  <div class="flex items-start gap-3" data-step="pages">
+                    <span class="step-icon grid h-8 w-8 shrink-0 place-items-center rounded-full bg-white/5 text-slate-400 ring-1 ring-white/10"></span>
+                    <div class="min-w-0">
+                      <p class="text-xs font-medium text-slate-200">Enable Pages</p>
+                      <p class="step-detail mt-0.5 text-[11px] text-slate-500">Waiting</p>
+                    </div>
+                  </div>
+                  <div class="flex items-start gap-3" data-step="build">
+                    <span class="step-icon grid h-8 w-8 shrink-0 place-items-center rounded-full bg-white/5 text-slate-400 ring-1 ring-white/10"></span>
+                    <div class="min-w-0">
+                      <p class="text-xs font-medium text-slate-200">Pages build</p>
+                      <p class="step-detail mt-0.5 text-[11px] text-slate-500">Waiting</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Result -->
+              <div id="deployResult" class="hidden rounded-2xl border border-emerald-400/25 bg-emerald-500/[.06] p-4">
+                <div class="flex items-start gap-3">
+                  <span class="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-full bg-emerald-500/15 text-emerald-300 ring-1 ring-emerald-400/25" data-icon="check" data-icon-class="h-4 w-4"></span>
+                  <div class="min-w-0 flex-1">
+                    <div class="flex flex-wrap items-center gap-2">
+                      <p class="text-sm font-semibold text-white">Live URL ready</p>
+                      <span id="resultStatus" class="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-300">Live</span>
+                    </div>
+                    <p id="resultRepo" class="mt-0.5 text-[11px] text-slate-400">—</p>
+                  </div>
+                </div>
+                <div class="mt-3 flex items-center gap-2 rounded-xl border border-white/10 bg-slate-950/60 p-2">
+                  <input id="resultUrl" type="text" readonly class="min-w-0 flex-1 bg-transparent px-2 text-xs text-slate-200 outline-none" aria-label="Live site URL" />
+                  <button type="button" id="copyResultBtn" data-action="copy-url" class="focus-ring inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-white/5 px-2.5 py-2 text-[11px] font-medium text-slate-300 transition hover:bg-white/10 hover:text-white">
+                    <span data-icon="copy" data-icon-class="h-3.5 w-3.5"></span>
+                    Copy
+                  </button>
+                  <button type="button" id="openResultBtn" data-action="open-url" class="focus-ring inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-emerald-500 px-2.5 py-2 text-[11px] font-semibold text-slate-950 transition hover:bg-emerald-400">
+                    <span data-icon="external" data-icon-class="h-3.5 w-3.5"></span>
+                    Open
+                  </button>
+                </div>
+              </div>
+            </form>
+          </section>
+
+          <!-- Right rail -->
+          <aside class="space-y-4">
+            <section class="rounded-2xl border border-white/10 bg-slate-900/40 p-5 shadow-lg shadow-black/10">
+              <div class="flex items-center justify-between">
+                <h2 class="text-sm font-semibold text-white">Connection</h2>
+                <span class="h-2 w-2 rounded-full bg-emerald-400"></span>
+              </div>
+              <div class="mt-4 flex items-center gap-3">
+                <img data-avatar src="" alt="" class="h-10 w-10 rounded-full bg-slate-800 ring-1 ring-white/10" />
+                <div class="min-w-0">
+                  <p id="connectionCardUser" class="truncate text-sm font-medium text-white">—</p>
+                  <p id="connectionCardStatus" class="text-[11px] text-slate-500">Checking…</p>
+                </div>
+              </div>
+              <div class="mt-4 rounded-lg border border-white/5 bg-black/20 p-3">
+                <p class="text-[10px] font-semibold uppercase tracking-[.14em] text-slate-600">Token scopes</p>
+                <p id="connectionScopes" class="mt-1 break-words text-[11px] leading-5 text-slate-400">—</p>
+              </div>
+              <button type="button" data-admin data-action="open-settings" class="focus-ring mt-4 flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[.03] px-3 py-2.5 text-xs font-medium text-slate-300 transition hover:bg-white/[.06] hover:text-white">
+                <span data-icon="settings" data-icon-class="h-3.5 w-3.5"></span>
+                Manage connection
+              </button>
+            </section>
+
+            <section class="rounded-2xl border border-white/10 bg-slate-900/40 p-5 shadow-lg shadow-black/10">
+              <div class="flex items-center justify-between">
+                <h2 class="text-sm font-semibold text-white">GitHub API budget</h2>
+                <span data-icon="chart" data-icon-class="h-4 w-4 text-slate-500"></span>
+              </div>
+              <div class="mt-4 flex items-end justify-between">
+                <div>
+                  <p id="rateCardRemaining" class="text-2xl font-semibold tracking-tight text-white">—</p>
+                  <p id="rateCardLimit" class="text-[11px] text-slate-500">of —</p>
+                </div>
+                <span id="rateCardReset" class="text-[11px] text-slate-500">Reset time unavailable</span>
+              </div>
+              <div class="mt-3 h-1.5 overflow-hidden rounded-full bg-white/5">
+                <div id="rateBar" class="h-full rounded-full bg-emerald-400 transition-all" style="width:0%"></div>
+              </div>
+              <p class="mt-3 text-[10px] leading-5 text-slate-600">Requests are serialized and paced to protect both primary and secondary limits.</p>
+            </section>
+
+            <section class="rounded-2xl border border-white/10 bg-slate-900/40 p-5 shadow-lg shadow-black/10">
+              <h2 class="text-sm font-semibold text-white">Deployment rules</h2>
+              <ol class="mt-4 space-y-3">
+                <li class="flex gap-3">
+                  <span class="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-emerald-500/10 text-[10px] font-semibold text-emerald-300 ring-1 ring-emerald-400/20">1</span>
+                  <p class="text-[11px] leading-5 text-slate-400">One HTML file is committed as <code class="rounded bg-white/5 px-1 text-[10px] text-slate-300">index.html</code>.</p>
+                </li>
+                <li class="flex gap-3">
+                  <span class="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-emerald-500/10 text-[10px] font-semibold text-emerald-300 ring-1 ring-emerald-400/20">2</span>
+                  <p class="text-[11px] leading-5 text-slate-400">The repository must be public for free GitHub Pages.</p>
+                </li>
+                <li class="flex gap-3">
+                  <span class="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-emerald-500/10 text-[10px] font-semibold text-emerald-300 ring-1 ring-emerald-400/20">3</span>
+                  <p class="text-[11px] leading-5 text-slate-400">Build status may take 10–60 seconds after the URL is issued.</p>
+                </li>
+              </ol>
+            </section>
+          </aside>
+        </div>
+
+        <!-- Deployments -->
+        <section id="deployments" class="scroll-mt-24">
+          <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div class="flex items-center gap-2">
+                <h2 class="text-lg font-semibold tracking-tight text-white">Deployments</h2>
+                <span id="deploymentsCount" class="rounded-full bg-white/5 px-2 py-0.5 text-[10px] font-semibold text-slate-400 ring-1 ring-white/10">0</span>
+              </div>
+              <p class="mt-1 text-xs text-slate-500">Metadata is stored locally in this browser. Tokens are never included.</p>
+            </div>
+            <span class="inline-flex items-center gap-1.5 text-[11px] text-slate-500">
+              <span class="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>
+              Live
+              <span class="ml-2 h-1.5 w-1.5 rounded-full bg-amber-400"></span>
+              Building
+              <span class="ml-2 h-1.5 w-1.5 rounded-full bg-rose-400"></span>
+              Error
+            </span>
+          </div>
+
+          <div id="deploymentsEmpty" class="rounded-2xl border border-dashed border-white/10 bg-slate-900/20 p-10 text-center">
+            <span class="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-white/5 text-slate-500 ring-1 ring-white/10" data-icon="rocket" data-icon-class="h-6 w-6"></span>
+            <p class="mt-4 text-sm font-medium text-white">No deployments yet</p>
+            <p class="mx-auto mt-1 max-w-md text-xs leading-5 text-slate-500">Deploy your first HTML file above. The repository, commit, Pages activation, and live URL will be handled automatically.</p>
+          </div>
+
+          <div id="deploymentsList" class="space-y-3"></div>
+        </section>
+
+        <!-- Activity -->
+        <section id="activity" class="scroll-mt-24 pb-8">
+          <div class="mb-4">
+            <h2 class="text-lg font-semibold tracking-tight text-white">Activity</h2>
+            <p class="mt-1 text-xs text-slate-500">Operational events from this browser session.</p>
+          </div>
+          <div class="rounded-2xl border border-white/10 bg-slate-900/40 p-4 shadow-lg shadow-black/10 sm:p-5">
+            <div id="activityList" class="space-y-1"></div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- SETTINGS MODAL (admin application only)                       -->
+  <!-- ============================================================ -->
+  <div id="settingsModal" data-admin class="modal hidden fixed inset-0 z-50 overflow-y-auto">
+    <div class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm modal-backdrop" data-close></div>
+    <div class="relative flex min-h-full items-center justify-center p-4">
+      <div class="w-full max-w-2xl overflow-hidden rounded-2xl border border-white/10 bg-slate-900 shadow-2xl">
+        <div class="flex items-center justify-between border-b border-white/5 px-5 py-4 sm:px-6">
+          <div>
+            <h2 class="text-base font-semibold text-white">Connection settings</h2>
+            <p class="mt-0.5 text-[11px] text-slate-500">OAuth broker, personal access token, and local data.</p>
+          </div>
+          <button type="button" data-close class="focus-ring rounded-lg p-2 text-slate-500 transition hover:bg-white/5 hover:text-white" aria-label="Close settings">
+            <span data-icon="x" data-icon-class="h-5 w-5"></span>
+          </button>
+        </div>
+
+        <div class="max-h-[75vh] space-y-7 overflow-y-auto p-5 scrollbar-thin sm:p-6">
+          <!-- OAuth -->
+          <section>
+            <div class="flex items-center justify-between gap-3">
+              <div>
+                <h3 class="flex items-center gap-2 text-sm font-semibold text-white">
+                  <span class="text-emerald-300" data-icon="shield" data-icon-class="h-4 w-4"></span>
+                  GitHub OAuth
+                </h3>
+                <p class="mt-1 text-[11px] leading-5 text-slate-500">The broker exchanges the authorization code and returns a user token. The client secret never enters this file.</p>
+              </div>
+              <span id="oauthStatus" class="shrink-0 rounded-full bg-white/5 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400 ring-1 ring-white/10">Not connected</span>
+            </div>
+
+            <div class="mt-4 grid gap-4">
+              <div>
+                <label for="settingClientId" class="text-xs font-medium text-slate-300">OAuth App Client ID</label>
+                <input id="settingClientId" type="text" autocomplete="off" spellcheck="false" placeholder="Iv1.0123456789abcdef" class="focus-ring mt-1.5 w-full rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2.5 text-sm text-white placeholder:text-slate-600 focus:border-emerald-400/40 focus:outline-none" />
+              </div>
+              <div>
+                <label for="settingBrokerUrl" class="text-xs font-medium text-slate-300">OAuth broker URL</label>
+                <input id="settingBrokerUrl" type="url" autocomplete="off" spellcheck="false" placeholder="https://auth.example.com/github/token" class="focus-ring mt-1.5 w-full rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2.5 text-sm text-white placeholder:text-slate-600 focus:border-emerald-400/40 focus:outline-none" />
+                <p class="mt-1.5 text-[11px] leading-5 text-slate-500">Must be HTTPS (HTTP is allowed only for localhost). It must accept a JSON POST and return JSON with <code class="rounded bg-white/5 px-1 text-[10px] text-slate-300">access_token</code>.</p>
+              </div>
+              <div class="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label for="settingScope" class="text-xs font-medium text-slate-300">OAuth scope</label>
+                  <select id="settingScope" class="focus-ring mt-1.5 w-full rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2.5 text-sm text-white focus:border-emerald-400/40 focus:outline-none">
+                    <option value="public_repo">public_repo — public repos only</option>
+                    <option value="repo">repo — public and private repos</option>
+                  </select>
+                </div>
+                <label class="flex items-end gap-3 pb-2.5">
+                  <input id="settingRemember" type="checkbox" class="h-4 w-4 rounded border-white/20 bg-slate-950 text-emerald-500 focus:ring-emerald-400/40" />
+                  <span class="text-xs text-slate-300">Remember token for this tab</span>
+                </label>
+              </div>
+              <div class="rounded-xl border border-white/5 bg-black/20 p-3">
+                <p class="text-[10px] font-semibold uppercase tracking-[.14em] text-slate-600">Redirect URI to register</p>
+                <div class="mt-1.5 flex items-start justify-between gap-2">
+                  <code id="redirectUriDisplay" class="break-all text-[11px] leading-5 text-slate-300">—</code>
+                  <button type="button" id="copyRedirectBtn" data-action="copy-redirect" class="shrink-0 rounded-md p-1 text-slate-500 transition hover:bg-white/10 hover:text-white" aria-label="Copy redirect URI">
+                    <span data-icon="copy" data-icon-class="h-4 w-4"></span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <button type="button" id="saveOAuthBtn" class="focus-ring mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400">
+              <span data-icon="check" data-icon-class="h-4 w-4"></span>
+              Save OAuth configuration
+            </button>
+          </section>
+
+          <div class="h-px bg-white/5"></div>
+
+          <!-- PAT -->
+          <section>
+            <h3 class="flex items-center gap-2 text-sm font-semibold text-white">
+              <span class="text-amber-300" data-icon="key" data-icon-class="h-4 w-4"></span>
+              Personal access token
+            </h3>
+            <p class="mt-1 text-[11px] leading-5 text-slate-500">Classic token with <code class="rounded bg-white/5 px-1 text-[10px] text-slate-300">public_repo</code> (or <code class="rounded bg-white/5 px-1 text-[10px] text-slate-300">repo</code>), or a fine-grained token with repository creation, contents write, and Pages write permissions. Kept in memory only.</p>
+            <div class="mt-3 flex flex-col gap-2 sm:flex-row">
+              <input id="patInput" type="password" autocomplete="off" spellcheck="false" placeholder="ghp_… or github_pat_…" class="focus-ring min-w-0 flex-1 rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2.5 text-sm text-white placeholder:text-slate-600 focus:border-emerald-400/40 focus:outline-none" />
+              <button type="button" id="connectPatBtn" class="focus-ring inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[.04] px-4 py-2.5 text-sm font-medium text-slate-200 transition hover:bg-white/[.08]">
+                <span data-spinner class="hidden" data-icon="loader" data-icon-class="h-4 w-4 animate-spin"></span>
+                <span data-btn-text>Connect token</span>
+              </button>
+            </div>
+            <div id="tokenStatus" class="mt-3 rounded-xl border border-white/5 bg-black/20 p-3 text-[11px] leading-5 text-slate-400">No token stored in this tab.</div>
+            <button type="button" id="disconnectBtn" class="focus-ring mt-3 hidden items-center gap-2 rounded-lg border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-xs font-medium text-rose-300 transition hover:bg-rose-500/15">
+              <span data-icon="logout" data-icon-class="h-3.5 w-3.5"></span>
+              Disconnect GitHub
+            </button>
+          </section>
+
+          <div class="h-px bg-white/5"></div>
+
+          <!-- Local data -->
+          <section class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h3 class="text-sm font-semibold text-white">Local workspace data</h3>
+              <p class="mt-1 text-[11px] leading-5 text-slate-500">Remove deployment metadata and activity from this browser. GitHub repositories and Pages sites are not touched.</p>
+            </div>
+            <button type="button" id="clearDataBtn" class="focus-ring inline-flex shrink-0 items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[.03] px-3.5 py-2.5 text-xs font-medium text-slate-300 transition hover:bg-white/[.07] hover:text-white">
+              <span data-icon="trash" data-icon-class="h-3.5 w-3.5"></span>
+              Clear local data
+            </button>
+          </section>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- BROKER SETUP MODAL (admin application only)                   -->
+  <!-- ============================================================ -->
+  <div id="brokerModal" data-admin class="modal hidden fixed inset-0 z-50 overflow-y-auto">
+    <div class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm modal-backdrop" data-close></div>
+    <div class="relative flex min-h-full items-center justify-center p-4">
+      <div class="w-full max-w-3xl overflow-hidden rounded-2xl border border-white/10 bg-slate-900 shadow-2xl">
+        <div class="flex items-center justify-between border-b border-white/5 px-5 py-4 sm:px-6">
+          <div>
+            <h2 class="text-base font-semibold text-white">Secure OAuth broker setup</h2>
+            <p class="mt-0.5 text-[11px] text-slate-500">Why a broker is required, and a minimal reference implementation.</p>
+          </div>
+          <button type="button" data-close class="focus-ring rounded-lg p-2 text-slate-500 transition hover:bg-white/5 hover:text-white" aria-label="Close broker setup">
+            <span data-icon="x" data-icon-class="h-5 w-5"></span>
+          </button>
+        </div>
+
+        <div class="max-h-[75vh] space-y-5 overflow-y-auto p-5 scrollbar-thin sm:p-6">
+          <div class="rounded-xl border border-amber-400/15 bg-amber-500/[.06] p-4">
+            <p class="text-xs leading-6 text-amber-100/80">
+              <strong class="font-semibold text-amber-200">Do not put a client secret in this HTML file.</strong>
+              GitHub’s token endpoint requires a client secret, does not support CORS, and cannot be called safely from a browser. The broker is a tiny server-side function that holds the secret and performs the exchange.
+            </p>
+          </div>
+
+          <section>
+            <h3 class="text-sm font-semibold text-white">1. Create a GitHub OAuth App</h3>
+            <ol class="mt-2 list-decimal space-y-1.5 pl-5 text-xs leading-6 text-slate-400">
+              <li>GitHub → Settings → Developer settings → OAuth Apps → New OAuth App.</li>
+              <li>Set the callback URL to the redirect URI shown in this app’s settings.</li>
+              <li>Copy the Client ID into this app. Keep the Client Secret for the broker environment only.</li>
+              <li>Enable the OAuth scope required: <code class="rounded bg-white/5 px-1 text-[10px] text-slate-300">public_repo</code> for public sites, or <code class="rounded bg-white/5 px-1 text-[10px] text-slate-300">repo</code> if you need private repositories.</li>
+            </ol>
+          </section>
+
+          <section>
+            <h3 class="text-sm font-semibold text-white">2. Deploy the broker</h3>
+            <p class="mt-1 text-xs leading-6 text-slate-400">Reference Cloudflare Worker. Set <code class="rounded bg-white/5 px-1 text-[10px] text-slate-300">GITHUB_CLIENT_ID</code>, <code class="rounded bg-white/5 px-1 text-[10px] text-slate-300">GITHUB_CLIENT_SECRET</code>, and a comma-separated <code class="rounded bg-white/5 px-1 text-[10px] text-slate-300">ALLOWED_ORIGINS</code> allowlist.</p>
+            <div class="mt-3 overflow-hidden rounded-xl border border-white/10 bg-slate-950">
+              <div class="flex items-center justify-between border-b border-white/5 px-3 py-2">
+                <span class="text-[10px] font-semibold uppercase tracking-[.14em] text-slate-600">worker.js</span>
+                <button type="button" id="copyBrokerSampleBtn" data-action="copy-broker-sample" class="focus-ring inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[10px] font-medium text-slate-400 transition hover:bg-white/10 hover:text-white">
+                  <span data-icon="copy" data-icon-class="h-3 w-3"></span>
+                  Copy
+                </button>
+              </div>
+              <pre id="brokerSample" class="max-h-80 overflow-auto p-4 text-[11px] leading-5 text-slate-300 scrollbar-thin"></pre>
+            </div>
+          </section>
+
+          <section>
+            <h3 class="text-sm font-semibold text-white">3. Broker contract</h3>
+            <div class="mt-2 rounded-xl border border-white/5 bg-black/20 p-4 text-[11px] leading-6 text-slate-400">
+              <p><span class="font-semibold text-slate-200">Request:</span> <code class="text-emerald-300">POST {brokerUrl}</code> with JSON <code class="text-slate-300">{ code, code_verifier, redirect_uri, client_id }</code>.</p>
+              <p class="mt-1"><span class="font-semibold text-slate-200">Response:</span> <code class="text-emerald-300">200</code> with JSON <code class="text-slate-300">{ access_token, token_type, scope }</code> and CORS headers for this origin.</p>
+              <p class="mt-1"><span class="font-semibold text-slate-200">Never:</span> log the authorization code or token, or return the client secret.</p>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- RATE LIMIT MODAL                                              -->
+  <!-- ============================================================ -->
+  <div id="rateModal" class="modal hidden fixed inset-0 z-50 overflow-y-auto">
+    <div class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm modal-backdrop" data-close></div>
+    <div class="relative flex min-h-full items-center justify-center p-4">
+      <div class="w-full max-w-md rounded-2xl border border-white/10 bg-slate-900 p-5 shadow-2xl sm:p-6">
+        <div class="flex items-center justify-between">
+          <h2 class="text-base font-semibold text-white">GitHub API budget</h2>
+          <button type="button" data-close class="focus-ring rounded-lg p-2 text-slate-500 transition hover:bg-white/5 hover:text-white" aria-label="Close rate limit details">
+            <span data-icon="x" data-icon-class="h-5 w-5"></span>
+          </button>
+        </div>
+        <div class="mt-4 grid grid-cols-2 gap-3">
+          <div class="rounded-xl border border-white/5 bg-black/20 p-3">
+            <p class="text-[10px] uppercase tracking-wider text-slate-600">Remaining</p>
+            <p id="rateModalRemaining" class="mt-1 text-xl font-semibold text-white">—</p>
+          </div>
+          <div class="rounded-xl border border-white/5 bg-black/20 p-3">
+            <p class="text-[10px] uppercase tracking-wider text-slate-600">Limit</p>
+            <p id="rateModalLimit" class="mt-1 text-xl font-semibold text-white">—</p>
+          </div>
+        </div>
+        <p id="rateModalReset" class="mt-3 text-xs text-slate-400">Reset time unavailable.</p>
+        <p class="mt-4 text-[11px] leading-5 text-slate-500">When the budget reaches zero, Pages Pilot pauses or stops mutative work and surfaces the reset time instead of retrying blindly. Secondary-limit responses honor <code class="rounded bg-white/5 px-1 text-[10px] text-slate-300">Retry-After</code>.</p>
+        <button type="button" data-close class="focus-ring mt-5 w-full rounded-xl bg-white/5 px-4 py-2.5 text-sm font-medium text-slate-200 transition hover:bg-white/10">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- CONFIRM MODAL                                                 -->
+  <!-- ============================================================ -->
+  <div id="confirmModal" class="modal hidden fixed inset-0 z-50 overflow-y-auto">
+    <div class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm modal-backdrop" data-close></div>
+    <div class="relative flex min-h-full items-center justify-center p-4">
+      <div class="w-full max-w-md rounded-2xl border border-white/10 bg-slate-900 p-5 shadow-2xl sm:p-6">
+        <div class="flex items-start gap-3">
+          <span class="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-rose-500/10 text-rose-300 ring-1 ring-rose-400/20" data-icon="alert" data-icon-class="h-5 w-5"></span>
+          <div class="min-w-0">
+            <h2 id="confirmTitle" class="text-base font-semibold text-white">Confirm action</h2>
+            <p id="confirmMessage" class="mt-1 text-xs leading-5 text-slate-400">This action cannot be undone.</p>
+          </div>
+        </div>
+        <div class="mt-5 flex justify-end gap-2">
+          <button type="button" id="confirmCancelBtn" class="focus-ring rounded-xl border border-white/10 bg-white/[.03] px-3.5 py-2.5 text-xs font-medium text-slate-300 transition hover:bg-white/[.07] hover:text-white">Cancel</button>
+          <button type="button" id="confirmOkBtn" class="focus-ring rounded-xl bg-rose-500 px-3.5 py-2.5 text-xs font-semibold text-white transition hover:bg-rose-400">Confirm</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- BOOT LOADER + TOASTS                                          -->
+  <!-- ============================================================ -->
+  <div id="bootLoader" class="fixed inset-0 z-[90] hidden place-items-center bg-slate-950">
+    <div class="flex flex-col items-center gap-3">
+      <span class="text-emerald-300" data-icon="loader" data-icon-class="h-8 w-8 animate-spin"></span>
+      <p id="bootLoaderText" class="text-xs text-slate-400">Restoring secure session…</p>
+    </div>
+  </div>
+
+  <div id="toastContainer" class="pointer-events-none fixed bottom-4 right-4 z-[100] flex w-full max-w-sm flex-col gap-2" aria-live="polite" aria-atomic="false"></div>
+
+  <!-- Broker sample source (not executed) -->
+  <script type="text/plain" id="brokerSampleSource">
+export default {
+  async fetch(request, env) {
+    const origin = request.headers.get('Origin') || '';
+    const allowed = (env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
+    const cors = {
+      'Access-Control-Allow-Origin': allowed.includes(origin) ? origin : 'null',
+      'Access-Control-Allow-Methods': 'POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
+      'Vary': 'Origin'
+    };
+    if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
+    if (request.method !== 'POST') return json({ error: 'method_not_allowed' }, 405, cors);
+    if (!allowed.includes(origin)) return json({ error: 'origin_not_allowed' }, 403, cors);
+
+    const { code, code_verifier, redirect_uri } = await request.json().catch(() => ({}));
+    if (!code || !code_verifier || !redirect_uri) {
+      return json({ error: 'invalid_request' }, 400, cors);
+    }
+
+    const gh = await fetch('https://github.com/login/oauth/access_token', {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        client_id: env.GITHUB_CLIENT_ID,
+        client_secret: env.GITHUB_CLIENT_SECRET,
+        code,
+        redirect_uri,
+        code_verifier
+      })
+    });
+
+    const data = await gh.json().catch(() => ({}));
+    if (!gh.ok || data.error) {
+      return json({ error: data.error || 'exchange_failed', error_description: data.error_description }, 400, cors);
+    }
+    return json({ access_token: data.access_token, token_type: data.token_type, scope: data.scope }, 200, cors);
+  }
+};
+
+function json(body, status, headers) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...headers, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }
+  });
+}
+  </script>
+
+  <!-- ============================================================ -->
+  <!-- APPLICATION                                                   -->
+  <!-- ============================================================ -->
+  <script>
+  (() => {
+    'use strict';
+
+    // ============================================================
+    // CONSTANTS & ICONS
+    // ============================================================
+    const API_BASE = 'https://api.github.com';
+    const API_VERSION = '2022-11-28';
+    const MAX_FILE_SIZE = 8 * 1024 * 1024;
+
+    const LS_CONFIG = 'pagespilot.config.v1';
+    const LS_DEPLOYMENTS = 'pagespilot.deployments.v1';
+    const LS_USER = 'pagespilot.user.v1';
+    const SS_TOKEN = 'pagespilot.token.v1';
+    const SS_STATE = 'pagespilot.oauth.state';
+    const SS_VERIFIER = 'pagespilot.oauth.verifier';
+    const SS_REDIRECT = 'pagespilot.oauth.redirect';
+
+    const DEFAULT_CONFIG = Object.freeze({
+      clientId: '',
+      brokerUrl: '',
+      scope: 'public_repo',
+      remember: true
+    });
+
+    // ============================================================
+    // WEBVIEW BRIDGE
+    // ------------------------------------------------------------
+    // When Pages Pilot runs inside a native wrapper (iOS WKWebView,
+    // Android WebView, or React Native WebView) the host app needs a
+    // signal to dismiss the in-app browser session after a successful
+    // login. The host injects one of the following bridges; when none
+    // is present the code is a no-op so browser usage stays identical.
+    //
+    //   iOS:            window.webkit.messageHandlers.pagesPilot
+    //   Android:        window.Android.postMessage
+    //   React Native:   window.ReactNativeWebView.postMessage
+    // ============================================================
+    const webViewBridge = (() => {
+      if (typeof window.ReactNativeWebView !== 'undefined'
+          && typeof window.ReactNativeWebView.postMessage === 'function') {
+        return 'react-native';
+      }
+      if (window.webkit
+          && window.webkit.messageHandlers
+          && window.webkit.messageHandlers.pagesPilot
+          && typeof window.webkit.messageHandlers.pagesPilot.postMessage === 'function') {
+        return 'ios';
+      }
+      if (window.Android && typeof window.Android.postMessage === 'function') {
+        return 'android';
+      }
+      return null;
+    })();
+
+    function notifyWebView(type, payload) {
+      if (!webViewBridge) return;
+      const message = JSON.stringify({ type, ...(payload || {}) });
+      try {
+        if (webViewBridge === 'react-native') {
+          window.ReactNativeWebView.postMessage(message);
+        } else if (webViewBridge === 'ios') {
+          window.webkit.messageHandlers.pagesPilot.postMessage(message);
+        } else if (webViewBridge === 'android') {
+          window.Android.postMessage(message);
+        }
+      } catch (error) {
+        console.warn('WebView bridge dispatch failed.', error);
+      }
+    }
+
+    // ============================================================
+    // PERSISTENT TOKEN STORAGE
+    // ------------------------------------------------------------
+    // Tokens are written to localStorage so the user stays signed in
+    // across app launches / WebView restarts. sessionStorage is used
+    // as a fallback when localStorage is unavailable (private mode).
+    // The `remember` config flag still lets the admin disable
+    // persistence per deployment.
+    // ============================================================
+    const tokenStorage = {
+      get() {
+        try {
+          const persistent = localStorage.getItem(SS_TOKEN);
+          if (persistent) return persistent;
+        } catch { /* localStorage may be blocked */ }
+        try {
+          return sessionStorage.getItem(SS_TOKEN);
+        } catch {
+          return null;
+        }
+      },
+      set(token) {
+        try {
+          localStorage.setItem(SS_TOKEN, token);
+          // Clean up any legacy per-tab copy to avoid divergence.
+          try { sessionStorage.removeItem(SS_TOKEN); } catch { /* noop */ }
+        } catch {
+          try { sessionStorage.setItem(SS_TOKEN, token); } catch { /* noop */ }
+        }
+      },
+      remove() {
+        try { localStorage.removeItem(SS_TOKEN); } catch { /* noop */ }
+        try { sessionStorage.removeItem(SS_TOKEN); } catch { /* noop */ }
+      }
+    };
+
+    // ============================================================
+    // PERSISTENT USER-ID STORAGE
+    // ------------------------------------------------------------
+    // The master plan requires us to save the authenticated user's
+    // token AND identifiers on successful login so the app can restore
+    // a signed-in state without asking the user to re-enter
+    // credentials. The token above drives API access; this record
+    // mirrors the identity (id / login / name / avatar) so the
+    // WebView / native host can identify the current session
+    // immediately on launch without an extra round trip.
+    // ============================================================
+    const userStorage = {
+      get() {
+        try {
+          const raw = localStorage.getItem(LS_USER);
+          if (!raw) return null;
+          const parsed = JSON.parse(raw);
+          if (!parsed || typeof parsed !== 'object' || !parsed.login) return null;
+          return parsed;
+        } catch {
+          return null;
+        }
+      },
+      set(user) {
+        if (!user || !user.login) return;
+        try {
+          localStorage.setItem(LS_USER, JSON.stringify({
+            id: user.id || null,
+            login: user.login,
+            name: user.name || '',
+            avatar_url: user.avatar_url || ''
+          }));
+        } catch { /* storage may be blocked */ }
+      },
+      remove() {
+        try { localStorage.removeItem(LS_USER); } catch { /* noop */ }
+      }
+    };
+
+    const ICONS = {
+      github: '<path fill="currentColor" stroke="none" d="M12 .5C5.73.5.5 5.73.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56 0-.28-.01-1.02-.02-2-3.2.7-3.88-1.54-3.88-1.54-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.71.08-.71 1.17.08 1.78 1.2 1.78 1.2 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.23-1.28-5.23-5.7 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11.1 11.1 0 0 1 5.8 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.43-2.69 5.41-5.25 5.69.41.36.78 1.06.78 2.14 0 1.55-.01 2.8-.01 3.18 0 .31.21.68.8.56A10.52 10.52 0 0 0 23.5 12C23.5 5.73 18.27.5 12 .5Z"/>',
+      rocket: '<path d="M4.5 16.5c-1.5 1.3-2 5-2 5s3.7-.5 5-2c.7-.8.7-2 0-2.8-.8-.7-2-.7-2.8 0Z"/><path d="m12 15 3-3"/><path d="M9 12 5 8l4-1 1-4 4 4 1 4-4 1-2 4Z"/>',
+      shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/>',
+      upload: '<path d="M12 16V4"/><path d="m7 9 5-5 5 5"/><path d="M20 16v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2"/>',
+      file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/><path d="m9 15 2 2 4-4"/>',
+      repo: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/>',
+      link: '<path d="M10 13a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7L13 18"/>',
+      copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
+      external: '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
+      check: '<path d="m20 6-11 11-5-5"/>',
+      x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+      alert: '<path d="M10.3 3.7 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.7a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+      info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+      refresh: '<path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/>',
+      trash: '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/>',
+      settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/>',
+      menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
+      logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/>',
+      key: '<circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/>',
+      book: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/>',
+      chart: '<path d="M3 3v18h18"/><path d="m7 16 4-5 4 3 5-7"/>',
+      clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+      chevron: '<path d="m9 18 6-6-6-6"/>',
+      loader: '<path d="M21 12a9 9 0 1 1-6.2-8.6"/>',
+      lock: '<rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',
+      sparkles: '<path d="m12 3-1.9 4.6L5.5 9.5l4.6 1.9L12 16l1.9-4.6 4.6-1.9-4.6-1.9L12 3Z"/><path d="M5 17h.01"/><path d="M19 17h.01"/>'
+    };
+
+    function icon(name, className = 'h-5 w-5') {
+      return `<svg class="${className}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`;
+    }
+
+    function hydrateIcons(root = document) {
+      root.querySelectorAll('[data-icon]').forEach((el) => {
+        const cls = el.getAttribute('data-icon-class') || 'h-5 w-5';
+        el.innerHTML = icon(el.getAttribute('data-icon'), cls);
+      });
+    }
+
+    // ============================================================
+    // DOM & UTILITIES
+    // ============================================================
+    const $ = (selector, root = document) => root.querySelector(selector);
+    const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
+
+    const HTML_ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+    function escapeHtml(value) {
+      return String(value == null ? '' : value).replace(/[&<>"']/g, (ch) => HTML_ESCAPES[ch]);
+    }
+
+    function sleep(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    function formatBytes(bytes) {
+      if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+      const units = ['B', 'KB', 'MB', 'GB'];
+      const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+      return `${(bytes / (1024 ** i)).toFixed(i ? 1 : 0)} ${units[i]}`;
+    }
+
+    function timeAgo(iso) {
+      if (!iso) return 'unknown';
+      const ms = Date.now() - new Date(iso).getTime();
+      if (!Number.isFinite(ms) || ms < 0) return 'just now';
+      const seconds = Math.floor(ms / 1000);
+      if (seconds < 45) return 'just now';
+      const minutes = Math.floor(seconds / 60);
+      if (minutes < 60) return `${minutes}m ago`;
+      const hours = Math.floor(minutes / 60);
+      if (hours < 24) return `${hours}h ago`;
+      const days = Math.floor(hours / 24);
+      if (days < 30) return `${days}d ago`;
+      return new Date(iso).toLocaleDateString();
+    }
+
+    function formatReset(epochSeconds) {
+      if (!epochSeconds) return 'Unknown';
+      const diff = (epochSeconds * 1000) - Date.now();
+      if (diff <= 0) return 'now';
+      const mins = Math.ceil(diff / 60000);
+      if (mins < 60) return `in ${mins}m`;
+      return new Date(epochSeconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+
+    function base64UrlEncode(bytes) {
+      let binary = '';
+      for (let i = 0; i < bytes.length; i += 1) binary += String.fromCharCode(bytes[i]);
+      return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+    }
+
+    function randomVerifier() {
+      return base64UrlEncode(crypto.getRandomValues(new Uint8Array(48)));
+    }
+
+    async function sha256Challenge(verifier) {
+      if (!globalThis.crypto || !crypto.subtle) {
+        throw new Error('Web Crypto is unavailable. OAuth requires HTTPS or localhost.');
+      }
+      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+      return base64UrlEncode(new Uint8Array(digest));
+    }
+
+    function base64EncodeUtf8(text) {
+      const bytes = new TextEncoder().encode(text);
+      let binary = '';
+      const chunk = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunk) {
+        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+      }
+      return btoa(binary);
+    }
+
+    function sanitizeRepoName(raw) {
+      let name = String(raw || '').trim().toLowerCase()
+        .replace(/[^a-z0-9._-]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .replace(/--+/g, '-');
+      if (!name || name === '.' || name === '..') name = 'pages-site';
+      if (name.length > 100) name = name.slice(0, 100).replace(/-+$/g, '');
+      return name;
+    }
+
+    // -----------------------------------------------------------------
+    // Redirect URI resolver — canonicalized to the live GitHub Pages URL.
+    //
+    // GitHub Pages serves the app at:
+    //     https://asasrful40-maker.github.io/asasrful40-maker-pages-f1got/
+    //
+    // To keep the OAuth callback strictly equal to the URL registered in
+    // the GitHub OAuth App, we normalize whatever `location.pathname`
+    // resolves to: strip an explicit `index.html` / `index.htm` and
+    // enforce a trailing slash. This makes the redirect identical whether
+    // the WebView is opened from `/` or from `/index.html`.
+    // -----------------------------------------------------------------
+    function redirectUri() {
+      let path = location.pathname || '/';
+      if (/\/index\.html?$/i.test(path)) {
+        path = path.replace(/\/index\.html?$/i, '/');
+      }
+      if (!path.endsWith('/')) path += '/';
+      return `${location.origin}${path}`;
+    }
+
+    function normalizeSiteUrl(owner, repo, htmlUrl) {
+      if (htmlUrl && /^https:\/\//i.test(htmlUrl)) {
+        return htmlUrl.endsWith('/') ? htmlUrl : `${htmlUrl}/`;
+      }
+      if (repo.toLowerCase() === `${owner.toLowerCase()}.github.io`) {
+        return `https://${owner}.github.io/`;
+      }
+      return `https://${owner}.github.io/${repo}/`;
+    }
+
+    function isValidBrokerUrl(value) {
+      if (!value) return false;
+      try {
+        const url = new URL(value);
+        if (url.protocol === 'https:') return true;
+        return url.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(url.hostname);
+      } catch {
+        return false;
+      }
+    }
+
+    async function copyText(text) {
+      if (!text) return false;
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch {
+        try {
+          const textarea = document.createElement('textarea');
+          textarea.value = text;
+          textarea.setAttribute('readonly', '');
+          textarea.style.position = 'fixed';
+          textarea.style.opacity = '0';
+          document.body.appendChild(textarea);
+          textarea.select();
+          const ok = document.execCommand('copy');
+          textarea.remove();
+          return ok;
+        } catch {
+          return false;
+        }
+      }
+    }
+
+    // ============================================================
+    // STATE & STORAGE
+    // ============================================================
+    function loadConfig() {
+      try {
+        const parsed = JSON.parse(localStorage.getItem(LS_CONFIG) || '{}');
+        const config = { ...DEFAULT_CONFIG, ...parsed };
+        if (!['public_repo', 'repo'].includes(config.scope)) config.scope = 'public_repo';
+        return config;
+      } catch {
+        return { ...DEFAULT_CONFIG };
+      }
+    }
+
+    function saveConfig() {
+      try {
+        localStorage.setItem(LS_CONFIG, JSON.stringify(app.config));
+      } catch (error) {
+        console.warn('Could not persist configuration.', error);
+      }
+    }
+
+    function loadDeployments() {
+      try {
+        const parsed = JSON.parse(localStorage.getItem(LS_DEPLOYMENTS) || '[]');
+        if (!Array.isArray(parsed)) return [];
+        return parsed.filter((item) => item && item.id && item.url).slice(0, 200);
+      } catch {
+        return [];
+      }
+    }
+
+    function saveDeployments() {
+      try {
+        localStorage.setItem(LS_DEPLOYMENTS, JSON.stringify(app.deployments.slice(0, 200)));
+      } catch (error) {
+        console.warn('Could not persist deployments.', error);
+      }
+    }
+
+    const app = {
+      token: null,
+      tokenSource: null,
+      user: null,
+      scopes: [],
+      config: loadConfig(),
+      deployments: loadDeployments(),
+      activity: [],
+      rate: { limit: null, remaining: null, reset: null, used: null },
+      queue: Promise.resolve(),
+      lastMutationAt: 0,
+      deploying: false,
+      selectedFile: null,
+      confirmResolver: null,
+      rateWaitNotified: 0,
+      lastErrorToast: 0
+    };
+
+    // ============================================================
+    // MANAGED CONFIGURATION (supplied by the admin application)
+    // ============================================================
+    /**
+     * Resolve runtime configuration without ever exposing administrative
+     * controls in this client. Values arrive from:
+     *   1. window.PAGES_PILOT_CONFIG  (injected before this bundle runs)
+     *   2. the JSON document referenced by <meta name="pages-pilot-config">
+     * Both override anything cached locally. Only public, non-secret fields
+     * are accepted; the GitHub client secret never leaves the broker.
+     */
+    async function loadManagedConfig() {
+      let managed = null;
+
+      const injected = window.PAGES_PILOT_CONFIG;
+      if (injected && typeof injected === 'object') {
+        managed = { ...injected };
+      }
+
+      const meta = document.querySelector('meta[name="pages-pilot-config"]');
+      const metaHref = meta && meta.getAttribute('content');
+      if (metaHref) {
+        try {
+          const response = await fetch(metaHref, { cache: 'no-store', credentials: 'omit', mode: 'cors' });
+          if (response.ok) {
+            const data = await response.json().catch(() => null);
+            if (data && typeof data === 'object') {
+              managed = { ...(managed || {}), ...data };
+            }
+          }
+        } catch (error) {
+          console.warn('Managed configuration could not be loaded.', error);
+        }
+      }
+
+      if (!managed) return;
+
+      const nextScope = ['public_repo', 'repo'].includes(managed.scope)
+        ? managed.scope
+        : app.config.scope;
+
+      app.config = {
+        ...app.config,
+        clientId: typeof managed.clientId === 'string' ? managed.clientId.trim() : app.config.clientId,
+        brokerUrl: typeof managed.brokerUrl === 'string'
+          ? managed.brokerUrl.trim().replace(/\/+$/g, '')
+          : app.config.brokerUrl,
+        scope: nextScope,
+        remember: typeof managed.remember === 'boolean' ? managed.remember : app.config.remember
+      };
+
+      saveConfig();
+    }
+
+    // ============================================================
+    // TOASTS & MODALS
+    // ============================================================
+    const TOAST_META = {
+      success: { icon: 'check', title: 'Success', classes: 'bg-emerald-500/10 text-emerald-300' },
+      error: { icon: 'alert', title: 'Error', classes: 'bg-rose-500/10 text-rose-300' },
+      warning: { icon: 'alert', title: 'Attention', classes: 'bg-amber-500/10 text-amber-300' },
+      info: { icon: 'info', title: 'Info', classes: 'bg-cyan-500/10 text-cyan-300' }
+    };
+
+    function toast(type, message, title) {
+      const meta = TOAST_META[type] || TOAST_META.info;
+      const container = $('#toastContainer');
+      if (!container) return;
+
+      const el = document.createElement('div');
+      el.className = `pointer-events-auto flex items-start gap-3 rounded-xl border border-white/10 ${meta.classes} p-4 shadow-2xl backdrop-blur-xl toast-in`;
+      el.setAttribute('role', type === 'error' ? 'alert' : 'status');
+      el.innerHTML = `
+        <div class="mt-0.5 shrink-0">${icon(meta.icon, 'h-5 w-5')}</div>
+        <div class="min-w-0 flex-1">
+          <p class="text-sm font-semibold text-white">${escapeHtml(title || meta.title)}</p>
+          <p class="mt-1 text-sm leading-5 text-slate-300">${escapeHtml(message)}</p>
+        </div>
+        <button type="button" data-toast-close class="shrink-0 rounded-md p-1 text-slate-400 transition hover:bg-white/10 hover:text-white" aria-label="Dismiss notification">
+          ${icon('x', 'h-4 w-4')}
+        </button>
+      `;
+
+      container.appendChild(el);
+
+      const remove = () => {
+        el.classList.add('opacity-0', 'translate-y-1');
+        el.style.transition = 'opacity .18s ease, transform .18s ease';
+        setTimeout(() => el.remove(), 200);
+      };
+
+      const timer = setTimeout(remove, type === 'error' ? 9000 : 6000);
+      el.querySelector('[data-toast-close]')?.addEventListener('click', () => {
+        clearTimeout(timer);
+        remove();
+      });
+    }
+
+    function safeErrorToast(message) {
+      const now = Date.now();
+      if (now - app.lastErrorToast < 4000) return;
+      app.lastErrorToast = now;
+      toast('error', message || 'A background operation failed.', 'Unexpected error');
+    }
+
+    function syncBodyScroll() {
+      const modalOpen = Boolean(document.querySelector('.modal:not(.hidden):not([data-admin])'));
+      const bootOpen = !$('#bootLoader').classList.contains('hidden');
+      document.body.classList.toggle('overflow-hidden', modalOpen || bootOpen);
+    }
+
+    function openModal(id) {
+      const modal = document.getElementById(id);
+      // Administrative modals are served by the admin application only.
+      if (!modal || modal.hasAttribute('data-admin')) return;
+      modal.classList.remove('hidden');
+      syncBodyScroll();
+      setTimeout(() => {
+        const autofocus = modal.querySelector('[data-autofocus]');
+        if (autofocus) autofocus.focus();
+      }, 60);
+    }
+
+    function closeModal(modal) {
+      if (!modal) return;
+      modal.classList.add('hidden');
+      if (modal.id === 'confirmModal' && app.confirmResolver) {
+        const resolver = app.confirmResolver;
+        app.confirmResolver = null;
+        resolver(false);
+      }
+      syncBodyScroll();
+    }
+
+    function confirmAction({ title, message, confirmLabel = 'Confirm', danger = true }) {
+      return new Promise((resolve) => {
+        app.confirmResolver = resolve;
+        $('#confirmTitle').textContent = title;
+        $('#confirmMessage').textContent = message;
+        const ok = $('#confirmOkBtn');
+        ok.textContent = confirmLabel;
+        ok.className = danger
+          ? 'focus-ring rounded-xl bg-rose-500 px-3.5 py-2.5 text-xs font-semibold text-white transition hover:bg-rose-400'
+          : 'focus-ring rounded-xl bg-emerald-500 px-3.5 py-2.5 text-xs font-semibold text-slate-950 transition hover:bg-emerald-400';
+        openModal('confirmModal');
+      });
+    }
+
+    function showBoot(show, text) {
+      const loader = $('#bootLoader');
+      if (!loader) return;
+      if (text) $('#bootLoaderText').textContent = text;
+      loader.classList.toggle('hidden', !show);
+      loader.classList.toggle('grid', show);
+      syncBodyScroll();
+    }
+
+    // ============================================================
+    // ERRORS
+    // ============================================================
+    class AppError extends Error {
+      constructor(message, options = {}) {
+        super(message);
+        this.name = 'AppError';
+        this.status = options.status || 0;
+        this.code = options.code || '';
+        this.details = options.details || null;
+      }
+    }
+
+    class AuthError extends AppError {
+      constructor(message, options = {}) {
+        super(message, options);
+        this.name = 'AuthError';
+      }
+    }
+
+    class RateLimitError extends AppError {
+      constructor(message, options = {}) {
+        super(message, options);
+        this.name = 'RateLimitError';
+        this.reset = options.reset || null;
+      }
+    }
+
+    function githubErrorMessage(data, statusText) {
+      let message = (data && data.message) || statusText || 'GitHub API request failed.';
+      if (data && Array.isArray(data.errors) && data.errors.length) {
+        const details = data.errors
+          .map((item) => item.message || item.code || item.field)
+          .filter(Boolean)
+          .join(', ');
+        if (details) message += `: ${details}`;
+      }
+      return message;
+    }
+
+    // ============================================================
+    // API CLIENT: serialized, rate-aware, retrying
+    // ============================================================
+    function updateRate(headers) {
+      if (!headers) return;
+      const limit = Number.parseInt(headers.get('x-ratelimit-limit'), 10);
+      const remaining = Number.parseInt(headers.get('x-ratelimit-remaining'), 10);
+      const reset = Number.parseInt(headers.get('x-ratelimit-reset'), 10);
+      const used = Number.parseInt(headers.get('x-ratelimit-used'), 10);
+
+      if (Number.isFinite(limit)) app.rate.limit = limit;
+      if (Number.isFinite(remaining)) app.rate.remaining = remaining;
+      if (Number.isFinite(reset)) app.rate.reset = reset;
+      if (Number.isFinite(used)) app.rate.used = used;
+
+      renderRate();
+      renderStats();
+    }
+
+    async function ensureRateBudget() {
+      const { remaining, reset } = app.rate;
+      if (remaining !== 0 || !reset) return;
+
+      const waitMs = (reset * 1000) - Date.now();
+      if (waitMs <= 0) {
+        app.rate.remaining = null;
+        return;
+      }
+
+      if (waitMs <= 10000) {
+        if (Date.now() - app.rateWaitNotified > 15000) {
+          app.rateWaitNotified = Date.now();
+          toast('warning', `GitHub API budget exhausted. Resuming in ${Math.ceil(waitMs / 1000)}s.`, 'Pacing requests');
+        }
+        await sleep(waitMs + 500);
+        app.rate.remaining = null;
+        return;
+      }
+
+      throw new RateLimitError(`GitHub API rate limit reached. It resets ${formatReset(reset)}.`);
+    }
+
+    function isRateLimitResponse(response, data, message) {
+      if (response.status === 429) return true;
+      if (response.status !== 403) return false;
+      if (response.headers.get('x-ratelimit-remaining') === '0') return true;
+      if (response.headers.get('retry-after')) return true;
+      return /rate limit/i.test(message) || /secondary rate/i.test(message);
+    }
+
+    function retryDelayMs(response) {
+      const retryAfter = Number.parseFloat(response.headers.get('retry-after'));
+      if (Number.isFinite(retryAfter)) return Math.max(1000, retryAfter * 1000);
+      const reset = Number.parseInt(response.headers.get('x-ratelimit-reset'), 10);
+      if (Number.isFinite(reset)) {
+        const delta = (reset * 1000) - Date.now();
+        if (delta > 0) return delta + 1000;
+      }
+      return 60000;
+    }
+
+    function enqueue(task) {
+      const result = app.queue.then(task, task);
+      app.queue = result.catch(() => {});
+      return result;
+    }
+
+    function api(path, options = {}) {
+      return enqueue(() => apiRequest(path, options));
+    }
+
+    async function apiRequest(path, options = {}) {
+      if (!app.token) throw new AuthError('Not authenticated with GitHub.');
+
+      const method = (options.method || 'GET').toUpperCase();
+      const retries = Number.isInteger(options.retries) ? options.retries : 1;
+      const timeout = options.timeout || 30000;
+
+      await ensureRateBudget();
+
+      if (!['GET', 'HEAD'].includes(method)) {
+        const elapsed = Date.now() - app.lastMutationAt;
+        if (elapsed < 1000) await sleep(1000 - elapsed);
+        app.lastMutationAt = Date.now();
+      }
+
+      const url = path.startsWith('http') ? path : `${API_BASE}${path}`;
+      const headers = {
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': API_VERSION,
+        Authorization: `Bearer ${app.token}`,
+        ...(options.headers || {})
+      };
+      if (options.body !== undefined && !['GET', 'HEAD'].includes(method)) {
+        headers['Content-Type'] = 'application/json';
+      }
+
+      for (let attempt = 0; attempt <= retries; attempt += 1) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeout);
+        let response;
+
+        try {
+          response = await fetch(url, {
+            method,
+            headers,
+            body: options.body !== undefined && !['GET', 'HEAD'].includes(method)
+              ? JSON.stringify(options.body)
+              : undefined,
+            signal: controller.signal,
+            cache: 'no-store',
+            credentials: 'omit',
+            mode: 'cors'
+          });
+        } catch (error) {
+          clearTimeout(timer);
+          if (error.name === 'AbortError') {
+            throw new AppError('The GitHub API request timed out. Check your connection and try again.');
+          }
+          if (attempt < retries) {
+            await sleep(800 * (2 ** attempt));
+            continue;
+          }
+          throw new AppError('Network error reaching GitHub. Check your connection, CORS, or broker configuration.');
+        }
+
+        clearTimeout(timer);
+        updateRate(response.headers);
+
+        const text = await response.text();
+        let data = null;
+        if (text) {
+          try {
+            data = JSON.parse(text);
+          } catch {
+            data = { message: text.slice(0, 500) };
+          }
+        }
+
+        if (response.ok) {
+          return { data, headers: response.headers, status: response.status };
+        }
+
+        if (response.status === 401) {
+          clearSession();
+          throw new AuthError('Your GitHub session is no longer valid. Reconnect to continue.');
+        }
+
+        const message = githubErrorMessage(data, response.statusText);
+
+        if (isRateLimitResponse(response, data, message)) {
+          const waitMs = retryDelayMs(response);
+          if (attempt < 1 && waitMs <= 65000) {
+            toast('warning', `GitHub rate limit hit. Waiting ${Math.ceil(waitMs / 1000)}s before retrying.`, 'Pacing requests');
+            await sleep(waitMs + 500);
+            continue;
+          }
+          throw new RateLimitError(
+            `GitHub rate limit reached. ${message} Resets ${app.rate.reset ? formatReset(app.rate.reset) : 'shortly'}.`,
+            { status: response.status, reset: app.rate.reset }
+          );
+        }
+
+        if (response.status >= 500 && attempt < retries) {
+          await sleep(1000 * (2 ** attempt));
+          continue;
+        }
+
+        throw new AppError(message, { status: response.status, details: data });
+      }
+
+      throw new AppError('GitHub API request failed after retries.');
+    }
+
+    function clearSession() {
+      app.token = null;
+      app.tokenSource = null;
+      app.user = null;
+      app.scopes = [];
+      tokenStorage.remove();
+      userStorage.remove();
+      showAuth();
+    }
+
+    async function validateToken(token) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 20000);
+
+      try {
+        const response = await fetch(`${API_BASE}/user`, {
+          headers: {
+            Accept: 'application/vnd.github+json',
+            'X-GitHub-Api-Version': API_VERSION,
+            Authorization: `Bearer ${token}`
+          },
+          signal: controller.signal,
+          cache: 'no-store',
+          credentials: 'omit',
+          mode: 'cors'
+        });
+
+        updateRate(response.headers);
+        const data = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+          if (response.status === 401) {
+            throw new Error('GitHub rejected this token (401). It may be expired, revoked, or mistyped.');
+          }
+          const message = githubErrorMessage(data, response.statusText);
+          if (isRateLimitResponse(response, data, message)) {
+            throw new RateLimitError(`GitHub rate limit reached while validating the token. ${message}`);
+          }
+          throw new Error(message);
+        }
+
+        const scopes = (response.headers.get('x-oauth-scopes') || '')
+          .split(',')
+          .map((scope) => scope.trim())
+          .filter(Boolean);
+
+        return { user: data, scopes };
+      } catch (error) {
+        if (error.name === 'AbortError') throw new Error('Timed out while validating the token.');
+        throw error;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    // ============================================================
+    // OAUTH
+    // ============================================================
+    function renderAuthConfig() {
+      const configured = Boolean(app.config.clientId && app.config.brokerUrl);
+      const stateEl = $('#authOauthState');
+      const buttonText = $('#authOauthBtnText');
+      const hint = $('#authBrokerHint');
+
+      if (stateEl) {
+        stateEl.textContent = configured ? 'OAuth ready' : 'Unavailable';
+        stateEl.className = configured
+          ? 'inline-flex items-center rounded-full border border-emerald-400/20 bg-emerald-500/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-emerald-300'
+          : 'inline-flex items-center rounded-full border border-amber-400/20 bg-amber-500/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-amber-300';
+      }
+
+      // End users always see the same sign-in affordance; provisioning is an
+      // administrative concern handled outside this client.
+      if (buttonText) buttonText.textContent = 'Continue with GitHub';
+
+      if (hint) {
+        let brokerHost = '';
+        try {
+          brokerHost = app.config.brokerUrl ? new URL(app.config.brokerUrl).host : '';
+        } catch {
+          brokerHost = '';
+        }
+        hint.textContent = configured && brokerHost ? `Token exchange broker: ${brokerHost}` : '';
+      }
+
+      const redirect = $('#authRedirectUri');
+      if (redirect) redirect.textContent = redirectUri();
+    }
+
+    async function startOAuth() {
+      try {
+        if (!app.config.clientId || !app.config.brokerUrl) {
+          toast('warning', 'GitHub sign-in is not available right now. Please contact your administrator.', 'Sign-in unavailable');
+          notifyWebView('auth-unavailable');
+          return;
+        }
+
+        if (location.protocol !== 'https:' && !['localhost', '127.0.0.1'].includes(location.hostname)) {
+          toast('error', 'OAuth requires HTTPS or localhost so Web Crypto and secure redirects are available.');
+          return;
+        }
+
+        const verifier = randomVerifier();
+        const challenge = await sha256Challenge(verifier);
+        const state = (crypto.randomUUID && crypto.randomUUID()) || randomVerifier();
+        const redirect = redirectUri();
+
+        sessionStorage.setItem(SS_STATE, state);
+        sessionStorage.setItem(SS_VERIFIER, verifier);
+        sessionStorage.setItem(SS_REDIRECT, redirect);
+
+        const url = new URL('https://github.com/login/oauth/authorize');
+        url.searchParams.set('client_id', app.config.clientId);
+        url.searchParams.set('redirect_uri', redirect);
+        url.searchParams.set('scope', app.config.scope);
+        url.searchParams.set('state', state);
+        url.searchParams.set('code_challenge', challenge);
+        url.searchParams.set('code_challenge_method', 'S256');
+        url.searchParams.set('allow_signup', 'true');
+
+        // Navigate within the current WebView / browser session. Inside a
+        // native wrapper this keeps the OAuth flow in-app; the host observes
+        // the eventual auth-success / auth-error bridge message and dismisses.
+        notifyWebView('auth-started', { scope: app.config.scope });
+        location.assign(url.toString());
+      } catch (error) {
+        toast('error', error.message || 'Could not start GitHub sign-in.', 'Sign-in error');
+        notifyWebView('auth-error', { message: error.message || 'start_failed' });
+      }
+    }
+
+    function cleanOAuthParams() {
+      try {
+        const url = new URL(location.href);
+        ['code', 'state', 'error', 'error_description', 'error_uri', 'scope'].forEach((key) => {
+          url.searchParams.delete(key);
+        });
+        const search = url.searchParams.toString();
+        history.replaceState({}, '', `${url.pathname}${search ? `?${search}` : ''}${url.hash}`);
+      } catch {
+        /* ignore */
+      }
+    }
+
+    async function exchangeCode(code, verifier, redirect) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 25000);
+
+      try {
+        const response = await fetch(app.config.brokerUrl, {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            code,
+            code_verifier: verifier,
+            redirect_uri: redirect,
+            client_id: app.config.clientId
+          }),
+          signal: controller.signal,
+          cache: 'no-store',
+          credentials: 'omit',
+          mode: 'cors'
+        });
+
+        const text = await response.text();
+        let data = {};
+        try {
+          data = text ? JSON.parse(text) : {};
+        } catch {
+          data = {};
+        }
+
+        if (!response.ok) {
+          throw new Error(data.error_description || data.error || `OAuth broker returned HTTP ${response.status}.`);
+        }
+
+        const token = data.access_token || data.token;
+        if (!token) throw new Error('The OAuth broker response did not include an access_token.');
+        return { token, scope: data.scope || '' };
+      } catch (error) {
+        if (error.name === 'AbortError') {
+          throw new Error('The OAuth broker timed out. Check that it is running, reachable, and CORS-enabled.');
+        }
+        throw error;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    async function handleOAuthCallback(params) {
+      const error = params.get('error');
+      if (error) {
+        cleanOAuthParams();
+        toast('error', params.get('error_description') || `GitHub sign-in was cancelled (${error}).`, 'Sign-in cancelled');
+        notifyWebView('auth-error', { error, description: params.get('error_description') || '' });
+        showAuth();
+        return;
+      }
+
+      const code = params.get('code');
+      const returnedState = params.get('state');
+      const expectedState = sessionStorage.getItem(SS_STATE);
+      const verifier = sessionStorage.getItem(SS_VERIFIER);
+      const storedRedirect = sessionStorage.getItem(SS_REDIRECT) || redirectUri();
+
+      sessionStorage.removeItem(SS_STATE);
+      sessionStorage.removeItem(SS_VERIFIER);
+      sessionStorage.removeItem(SS_REDIRECT);
+      cleanOAuthParams();
+
+      if (!code) {
+        showAuth();
+        return;
+      }
+
+      try {
+        if (!expectedState || returnedState !== expectedState) {
+          throw new Error('OAuth state validation failed. Start sign-in again.');
+        }
+        if (!verifier) throw new Error('OAuth verifier is missing. Start sign-in again.');
+        if (!app.config.brokerUrl) throw new Error('No OAuth broker is configured.');
+
+        showBoot(true, 'Exchanging authorization code…');
+        const { token } = await exchangeCode(code, verifier, storedRedirect);
+
+        app.token = token;
+        app.tokenSource = 'oauth';
+        if (app.config.remember) {
+          tokenStorage.set(token);
+        } else {
+          tokenStorage.remove();
+        }
+
+        await bootstrapSession();
+        toast('success', 'GitHub connected. Your dashboard is ready.', 'Signed in');
+        logActivity('Connected with GitHub OAuth', 'auth');
+
+        // Signal the native wrapper that login succeeded. The host is
+        // expected to dismiss the WebView; the web UI also renders the
+        // dashboard behind the scenes for seamless handoff.
+        notifyWebView('auth-success', {
+          login: (app.user && app.user.login) || '',
+          id: (app.user && app.user.id) || null,
+          name: (app.user && app.user.name) || ''
+        });
+      } catch (error) {
+        console.error(error);
+        app.token = null;
+        app.tokenSource = null;
+        tokenStorage.remove();
+        userStorage.remove();
+        showAuth();
+        toast('error', error.message || 'OAuth sign-in failed.', 'Sign-in failed');
+        notifyWebView('auth-error', { message: error.message || 'oauth_failed' });
+      } finally {
+        showBoot(false);
+      }
+    }
+
+    async function bootstrapSession() {
+      const { data: user, headers } = await api('/user');
+      app.user = user;
+      // Persist the authenticated identity alongside the token so the
+      // WebView / native host can restore the signed-in session (including
+      // the user id) without requiring the user to re-enter credentials.
+      userStorage.set(user);
+      app.scopes = (headers.get('x-oauth-scopes') || '')
+        .split(',')
+        .map((scope) => scope.trim())
+        .filter(Boolean);
+      showDashboard();
+    }
+
+    async function connectPat() {
+      const input = $('#patInput');
+      const token = input.value.trim();
+      if (!token) {
+        toast('warning', 'Enter a personal access token first.');
+        return;
+      }
+
+      const button = $('#connectPatBtn');
+      setButtonLoading(button, true, 'Connecting…');
+
+      try {
+        const { user, scopes } = await validateToken(token);
+        app.token = token;
+        app.tokenSource = 'pat';
+        app.user = user;
+        app.scopes = scopes;
+        userStorage.set(user);
+        tokenStorage.remove();
+        input.value = '';
+        showDashboard();
+        closeModal($('#settingsModal'));
+        toast('success', `Connected as @${user.login}.`, 'Token accepted');
+        logActivity('Connected with a personal access token', 'auth');
+        notifyWebView('auth-success', { login: user.login, id: user.id, name: user.name || '', source: 'pat' });
+      } catch (error) {
+        toast('error', error.message || 'Could not validate this token.', 'Token validation failed');
+        notifyWebView('auth-error', { message: error.message || 'pat_failed' });
+      } finally {
+        setButtonLoading(button, false, 'Connect token');
+      }
+    }
+
+    async function signOut() {
+      const ok = await confirmAction({
+        title: 'Disconnect GitHub?',
+        message: 'The token will be removed from this browser. Your repositories and Pages sites will remain live. Revoke the token separately in GitHub settings if needed.',
+        confirmLabel: 'Disconnect'
+      });
+      if (!ok) return;
+
+      clearSession();
+      closeModal($('#settingsModal'));
+      renderAuthConfig();
+      toast('success', 'Disconnected from GitHub.');
+      logActivity('Disconnected GitHub session', 'auth');
+      notifyWebView('auth-signout');
+    }
+
+    // ============================================================
+    // UI RENDERING
+    // ============================================================
+    const STATUS_META = {
+      live: {
+        label: 'Live',
+        classes: 'bg-emerald-500/10 text-emerald-300 ring-emerald-500/20',
+        dot: 'bg-emerald-400'
+      },
+      building: {
+        label: 'Building',
+        classes: 'bg-amber-500/10 text-amber-300 ring-amber-500/20',
+        dot: 'bg-amber-400 animate-pulse'
+      },
+      error: {
+        label: 'Build error',
+        classes: 'bg-rose-500/10 text-rose-300 ring-rose-500/20',
+        dot: 'bg-rose-400'
+      },
+      unknown: {
+        label: 'Unknown',
+        classes: 'bg-slate-500/10 text-slate-300 ring-slate-500/20',
+        dot: 'bg-slate-400'
+      }
+    };
+
+    function setText(id, value) {
+      const el = document.getElementById(id);
+      if (el) el.textContent = value;
+    }
+
+    function renderUser() {
+      const user = app.user;
+      if (!user) return;
+
+      setText('userName', user.name || user.login);
+      setText('userLogin', `@${user.login}`);
+      setText('topbarUserName', user.name || user.login);
+
+      $$('[data-avatar]').forEach((img) => {
+        img.src = user.avatar_url || `https://github.com/identicons/${encodeURIComponent(user.login)}.png`;
+        img.alt = `@${user.login}`;
+      });
+
+      setText('connectionCardUser', user.name ? `${user.name} · @${user.login}` : `@${user.login}`);
+      setText('connectionCardStatus', app.tokenSource === 'oauth' ? 'OAuth session active' : 'Personal access token');
+      setText('connectionScopes', app.scopes.length ? app.scopes.join(', ') : (app.tokenSource === 'pat' ? 'Fine-grained or limited-scope token' : 'Scope header unavailable'));
+    }
+
+    function renderConnectionCard() {
+      if (!app.user) {
+        setText('connectionCardUser', 'Not connected');
+        setText('connectionCardStatus', 'Connect GitHub to deploy');
+        setText('connectionScopes', '—');
+      } else {
+        renderUser();
+      }
+    }
+
+    function renderRate() {
+      const badge = $('#rateBadge');
+      if (!badge) return;
+
+      const { remaining, limit, reset } = app.rate;
+      const text = $('#rateBadgeText');
+      const dot = $('#rateDot');
+
+      if (text) {
+        text.textContent = remaining == null ? 'API —' : `API ${remaining.toLocaleString()}`;
+      }
+
+      let dotClass = 'h-2 w-2 rounded-full bg-slate-500';
+      if (remaining != null) {
+        if (remaining <= 100) dotClass = 'h-2 w-2 rounded-full bg-rose-400';
+        else if (remaining <= 1000) dotClass = 'h-2 w-2 rounded-full bg-amber-400';
+        else dotClass = 'h-2 w-2 rounded-full bg-emerald-400';
+      }
+      if (dot) dot.className = dotClass;
+
+      setText('rateCardRemaining', remaining == null ? '—' : remaining.toLocaleString());
+      setText('rateCardLimit', limit == null ? 'of —' : `of ${limit.toLocaleString()}`);
+      setText('rateCardReset', reset ? `Resets ${formatReset(reset)}` : 'Reset time unavailable');
+
+      const bar = $('#rateBar');
+      if (bar) {
+        const pct = limit && remaining != null
+          ? Math.max(0, Math.min(100, (remaining / limit) * 100))
+          : 0;
+        bar.style.width = `${pct}%`;
+        bar.className = `h-full rounded-full transition-all ${pct > 30 ? 'bg-emerald-400' : pct > 10 ? 'bg-amber-400' : 'bg-rose-400'}`;
+      }
+
+      setText('rateModalRemaining', remaining == null ? '—' : remaining.toLocaleString());
+      setText('rateModalLimit', limit == null ? '—' : limit.toLocaleString());
+      setText('rateModalReset', reset ? `Resets ${formatReset(reset)} (${new Date(reset * 1000).toLocaleString()}).` : 'Reset time unavailable.');
+    }
+
+    function renderStats() {
+      const total = app.deployments.length;
+      const live = app.deployments.filter((item) => item.status === 'live').length;
+      const repos = new Set(app.deployments.map((item) => `${item.owner}/${item.repo}`)).size;
+
+      setText('statDeployments', total.toLocaleString());
+      setText('statLive', live.toLocaleString());
+      setText('statRepos', repos.toLocaleString());
+      setText('statRate', app.rate.remaining == null ? '—' : app.rate.remaining.toLocaleString());
+      setText('sidebarDeployCount', total.toLocaleString());
+    }
+
+    function renderDeployments() {
+      const list = $('#deploymentsList');
+      const empty = $('#deploymentsEmpty');
+      if (!list || !empty) return;
+
+      setText('deploymentsCount', app.deployments.length.toLocaleString());
+
+      if (!app.deployments.length) {
+        empty.classList.remove('hidden');
+        list.innerHTML = '';
+        return;
+      }
+
+      empty.classList.add('hidden');
+
+      list.innerHTML = app.deployments.map((dep) => {
+        const meta = STATUS_META[dep.status] || STATUS_META.unknown;
+        return `
+          <article class="group rounded-2xl border border-white/10 bg-slate-900/40 p-4 transition hover:border-emerald-400/20 hover:bg-slate-900/70">
+            <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div class="flex min-w-0 items-start gap-3">
+                <div class="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-white/5 text-slate-300 ring-1 ring-white/10">
+                  ${icon('repo', 'h-5 w-5')}
+                </div>
+                <div class="min-w-0">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <a href="${escapeHtml(dep.url)}" target="_blank" rel="noopener noreferrer" class="truncate text-sm font-semibold text-white transition hover:text-emerald-300">
+                      ${escapeHtml(dep.repo)}
+                    </a>
+                    <span class="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ring-1 ${meta.classes}">
+                      <span class="h-1.5 w-1.5 rounded-full ${meta.dot}"></span>
+                      ${meta.label}
+                    </span>
+                  </div>
+                  <p class="mt-1 truncate text-[11px] text-slate-400">${escapeHtml(dep.url)}</p>
+                  <p class="mt-1 text-[10px] text-slate-600">
+                    ${escapeHtml(dep.fileName || 'index.html')} · ${formatBytes(dep.fileSize || 0)} · updated ${timeAgo(dep.updatedAt || dep.createdAt)}
+                  </p>
+                </div>
+              </div>
+
+              <div class="flex shrink-0 items-center gap-1.5 self-end sm:self-auto">
+                <button type="button" data-action="copy-url" data-copy="${escapeHtml(dep.url)}" class="focus-ring rounded-lg p-2 text-slate-400 transition hover:bg-white/10 hover:text-white" aria-label="Copy URL for ${escapeHtml(dep.repo)}" title="Copy URL">
+                  ${icon('copy', 'h-4 w-4')}
+                </button>
+                <button type="button" data-action="open-url" data-url="${escapeHtml(dep.url)}" class="focus-ring rounded-lg p-2 text-slate-400 transition hover:bg-white/10 hover:text-white" aria-label="Open live site for ${escapeHtml(dep.repo)}" title="Open site">
+                  ${icon('external', 'h-4 w-4')}
+                </button>
+                <button type="button" data-action="refresh-deployment" data-id="${escapeHtml(dep.id)}" class="focus-ring rounded-lg p-2 text-slate-400 transition hover:bg-white/10 hover:text-white" aria-label="Refresh status for ${escapeHtml(dep.repo)}" title="Refresh status">
+                  ${icon('refresh', 'h-4 w-4')}
+                </button>
+                <button type="button" data-action="delete-deployment" data-id="${escapeHtml(dep.id)}" class="focus-ring rounded-lg p-2 text-slate-500 transition hover:bg-rose-500/10 hover:text-rose-300" aria-label="Remove record for ${escapeHtml(dep.repo)}" title="Remove record">
+                  ${icon('trash', 'h-4 w-4')}
+                </button>
+              </div>
+            </div>
+          </article>
+        `;
+      }).join('');
+    }
+
+    function renderActivity() {
+      const list = $('#activityList');
+      if (!list) return;
+
+      if (!app.activity.length) {
+        list.innerHTML = `
+          <div class="flex items-center gap-3 rounded-xl border border-white/5 bg-black/10 px-4 py-5">
+            <span class="text-slate-600">${icon('clock', 'h-5 w-5')}</span>
+            <p class="text-xs text-slate-500">No activity yet. Deployment and connection events will appear here.</p>
+          </div>
+        `;
+        return;
+      }
+
+      const colors = {
+        success: 'bg-emerald-400',
+        error: 'bg-rose-400',
+        warning: 'bg-amber-400',
+        auth: 'bg-cyan-400',
+        info: 'bg-slate-500',
+        repo: 'bg-emerald-400'
+      };
+
+      list.innerHTML = app.activity.slice(0, 30).map((item) => `
+        <div class="flex items-start gap-3 rounded-xl px-2 py-2.5 transition hover:bg-white/[.025]">
+          <span class="mt-1.5 h-2 w-2 shrink-0 rounded-full ${colors[item.type] || colors.info}"></span>
+          <div class="min-w-0 flex-1">
+            <p class="text-xs leading-5 text-slate-300">${escapeHtml(item.message)}</p>
+            <p class="mt-0.5 text-[10px] text-slate-600">${timeAgo(item.ts)}</p>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function renderSettingsStatus() {
+      const oauth = $('#oauthStatus');
+      if (oauth) {
+        oauth.textContent = app.token ? 'Connected' : 'Not connected';
+        oauth.className = app.token
+          ? 'shrink-0 rounded-full bg-emerald-500/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-emerald-300 ring-1 ring-emerald-400/20'
+          : 'shrink-0 rounded-full bg-white/5 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400 ring-1 ring-white/10';
+      }
+
+      const tokenStatus = $('#tokenStatus');
+      if (tokenStatus) {
+        tokenStatus.textContent = app.token
+          ? `Connected as @${app.user ? app.user.login : 'unknown'} via ${app.tokenSource === 'oauth' ? 'GitHub OAuth' : 'personal access token'}.`
+          : 'No token stored in this tab.';
+      }
+
+      const disconnect = $('#disconnectBtn');
+      if (disconnect) {
+        disconnect.classList.toggle('hidden', !app.token);
+        disconnect.classList.toggle('inline-flex', Boolean(app.token));
+      }
+    }
+
+    function fillSettings() {
+      $('#settingClientId').value = app.config.clientId || '';
+      $('#settingBrokerUrl').value = app.config.brokerUrl || '';
+      $('#settingScope').value = app.config.scope || 'public_repo';
+      $('#settingRemember').checked = Boolean(app.config.remember);
+      $('#redirectUriDisplay').textContent = redirectUri();
+      renderSettingsStatus();
+    }
+
+    function renderAll() {
+      renderUser();
+      renderConnectionCard();
+      renderRate();
+      renderStats();
+      renderDeployments();
+      renderActivity();
+      renderSettingsStatus();
+    }
+
+    function showAuth() {
+      $('#authScreen').classList.remove('hidden');
+      $('#dashboard').classList.add('hidden');
+      renderAuthConfig();
+    }
+
+    function showDashboard() {
+      $('#authScreen').classList.add('hidden');
+      $('#dashboard').classList.remove('hidden');
+      renderAll();
+    }
+
+    function setButtonLoading(button, busy, label) {
+      if (!button) return;
+      button.disabled = busy;
+      const spinner = button.querySelector('[data-spinner]');
+      const text = button.querySelector('[data-btn-text]');
+      if (spinner) spinner.classList.toggle('hidden', !busy);
+      if (text && label) text.textContent = label;
+    }
+
+    function setDeployBusy(busy) {
+      const button = $('#deployBtn');
+      if (!button) return;
+      button.disabled = busy;
+      $('#deploySpinner')?.classList.toggle('hidden', !busy);
+      setText('deployBtnText', busy ? 'Deploying…' : 'Deploy to GitHub Pages');
+    }
+
+    function setStep(stepName, status, detail) {
+      const step = document.querySelector(`[data-step="${stepName}"]`);
+      if (!step) return;
+
+      const iconEl = step.querySelector('.step-icon');
+      const detailEl = step.querySelector('.step-detail');
+
+      const meta = {
+        idle: { icon: 'clock', classes: 'bg-white/5 text-slate-400 ring-white/10' },
+        running: { icon: 'loader', classes: 'bg-cyan-500/10 text-cyan-300 ring-cyan-400/30' },
+        done: { icon: 'check', classes: 'bg-emerald-500/10 text-emerald-300 ring-emerald-400/30' },
+        error: { icon: 'x', classes: 'bg-rose-500/10 text-rose-300 ring-rose-400/30' }
+      }[status] || { icon: 'clock', classes: 'bg-white/5 text-slate-400 ring-white/10' };
+
+      if (iconEl) {
+        iconEl.className = `step-icon grid h-8 w-8 shrink-0 place-items-center rounded-full ring-1 ${meta.classes}`;
+        iconEl.innerHTML = icon(meta.icon, `h-4 w-4 ${status === 'running' ? 'animate-spin' : ''}`);
+      }
+
+      if (detailEl) {
+        detailEl.textContent = detail;
+        detailEl.className = `step-detail mt-0.5 text-[11px] ${status === 'error' ? 'text-rose-300' : 'text-slate-500'}`;
+      }
+    }
+
+    function resetPipeline() {
+      $('#pipeline')?.classList.remove('hidden');
+      ['repo', 'upload', 'pages', 'build'].forEach((step) => setStep(step, 'idle', 'Waiting'));
+    }
+
+    function logActivity(message, type = 'info') {
+      app.activity.unshift({
+        id: `act-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        ts: new Date().toISOString(),
+        message,
+        type
+      });
+      if (app.activity.length > 100) app.activity.length = 100;
+      renderActivity();
+    }
+
+    // ============================================================
+    // FILE SELECTION
+    // ============================================================
+    async function handleFile(file) {
+      if (!file) return;
+
+      const name = file.name || 'index.html';
+      if (!/\.html?$/i.test(name)) {
+        toast('error', 'Choose a single .html or .htm file.');
+        return;
+      }
+      if (file.size > MAX_FILE_SIZE) {
+        toast('error', `This file is ${formatBytes(file.size)}. The maximum is ${formatBytes(MAX_FILE_SIZE)}.`);
+        return;
+      }
+
+      try {
+        const text = await file.text();
+        if (!text.trim()) throw new Error('The selected file is empty.');
+
+        app.selectedFile = {
+          file,
+          text,
+          originalName: name,
+          size: file.size
+        };
+
+        setText('selectedFileName', name);
+        setText('selectedFileSize', formatBytes(file.size));
+        $('#selectedFile')?.classList.remove('hidden');
+        $('#selectedFile')?.classList.add('flex');
+        $('#dropzone')?.classList.add('hidden');
+
+        const repoInput = $('#repoName');
+        if (repoInput && !repoInput.value.trim()) repoInput.value = generateRepoName();
+
+        toast('success', `${name} loaded. Ready to deploy.`);
+      } catch (error) {
+        toast('error', error.message || 'Could not read the selected file.');
+      }
+    }
+
+    function removeSelectedFile() {
+      app.selectedFile = null;
+      const input = $('#fileInput');
+      if (input) input.value = '';
+      $('#selectedFile')?.classList.add('hidden');
+      $('#selectedFile')?.classList.remove('flex');
+      $('#dropzone')?.classList.remove('hidden');
+    }
+
+    function generateRepoName() {
+      const login = sanitizeRepoName(app.user?.login || 'site');
+      const suffix = Math.random().toString(36).slice(2, 7);
+      return sanitizeRepoName(`${login}-pages-${suffix}`);
+    }
+
+    // ============================================================
+    // DEPLOYMENT
+    // ============================================================
+    function explainDeployError(error) {
+      if (error instanceof RateLimitError) return error.message;
+      if (error.status === 401) return 'GitHub session expired. Reconnect and try again.';
+      if (error.status === 403) {
+        if (/pages/i.test(error.message)) {
+          return 'The token cannot manage GitHub Pages. Use the repo scope or grant Pages write permission.';
+        }
+        return 'GitHub denied this action. The token likely lacks repository creation or contents-write permission. Re-authorize with public_repo (or repo).';
+      }
+      if (error.status === 404) {
+        return 'Repository or branch not found. Confirm the token has access and the repository exists.';
+      }
+      if (error.status === 422) return error.message || 'GitHub rejected the repository or Pages configuration.';
+      return error.message || 'Unexpected deployment error.';
+    }
+
+    async function enablePages(owner, repo, branch) {
+      let lastError = null;
+
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          const response = await api(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pages`, {
+            method: 'POST',
+            body: { source: { branch, path: '/' }, build_type: 'legacy' }
+          });
+          return response.data;
+        } catch (error) {
+          lastError = error;
+
+          if (error.status === 409) {
+            try {
+              const existing = await api(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pages`);
+              return existing.data;
+            } catch {
+              throw error;
+            }
+          }
+
+          if (error.status === 422) {
+            try {
+              const existing = await api(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pages`);
+              return existing.data;
+            } catch {
+              if (attempt < 2 && /branch|not found|empty/i.test(error.message)) {
+                await sleep(2000);
+                continue;
+              }
+              throw error;
+            }
+          }
+
+          throw error;
+        }
+      }
+
+      throw lastError || new AppError('Could not enable GitHub Pages.');
+    }
+
+    async function pollPagesBuild(owner, repo) {
+      let interval = 4000;
+
+      for (let attempt = 0; attempt < 12; attempt += 1) {
+        await sleep(interval);
+
+        try {
+          const { data, headers } = await api(
+            `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pages/builds/latest`,
+            { retries: 0 }
+          );
+
+          const pollInterval = Number.parseInt(headers.get('x-poll-interval'), 10);
+          if (Number.isFinite(pollInterval) && pollInterval > 0) {
+            interval = Math.max(interval, pollInterval * 1000);
+          }
+
+          if (data && data.status === 'built') return { status: 'built' };
+          if (data && data.status === 'errored') {
+            throw new AppError((data.error && data.error.message) || 'GitHub Pages build failed.');
+          }
+        } catch (error) {
+          if (error.status === 404) continue;
+          if (error instanceof RateLimitError) throw error;
+          if (attempt === 11) throw error;
+        }
+      }
+
+      return { status: 'building' };
+    }
+
+    function showDeployResult(dep) {
+      const panel = $('#deployResult');
+      if (!panel) return;
+      panel.classList.remove('hidden');
+      $('#resultUrl').value = dep.url;
+      $('#resultRepo').textContent = `${dep.owner}/${dep.repo}`;
+      $('#resultStatus').textContent = dep.status === 'live' ? 'Live' : 'Building';
+      $('#copyResultBtn').dataset.copy = dep.url;
+      $('#openResultBtn').dataset.url = dep.url;
+    }
+
+    async function deploySelected() {
+      if (app.deploying) return;
+
+      if (!app.token || !app.user) {
+        toast('warning', 'Connect GitHub before deploying.');
+        startOAuth();
+        return;
+      }
+
+      if (!app.selectedFile) {
+        toast('warning', 'Choose an HTML file first.');
+        return;
+      }
+
+      const repoInput = $('#repoName');
+      const repo = sanitizeRepoName(repoInput.value.trim() || generateRepoName());
+      repoInput.value = repo;
+
+      const owner = app.user.login;
+      const file = app.selectedFile;
+      let currentStep = 'repo';
+
+      app.deploying = true;
+      setDeployBusy(true);
+      resetPipeline();
+      $('#deployResult')?.classList.add('hidden');
+
+      logActivity(`Deployment started for ${owner}/${repo}`, 'info');
+
+      try {
+        // 1. Ensure repository exists
+        currentStep = 'repo';
+        setStep('repo', 'running', 'Checking repository…');
+
+        let repoData = null;
+        try {
+          const response = await api(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`);
+          repoData = response.data;
+          setStep('repo', 'done', 'Repository ready');
+        } catch (error) {
+          if (error.status !== 404) throw error;
+        }
+
+        if (!repoData) {
+          setStep('repo', 'running', 'Creating repository…');
+          try {
+            const response = await api('/user/repos', {
+              method: 'POST',
+              body: {
+                name: repo,
+                description: 'Static site published with Pages Pilot',
+                private: false,
+                auto_init: true,
+                default_branch: 'main',
+                has_issues: false,
+                has_wiki: false,
+                has_projects: false
+              }
+            });
+            repoData = response.data;
+          } catch (error) {
+            if (error.status === 422 && /already exists/i.test(error.message)) {
+              const response = await api(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`);
+              repoData = response.data;
+            } else {
+              throw error;
+            }
+          }
+          setStep('repo', 'done', 'Repository created');
+          logActivity(`Created repository ${owner}/${repo}`, 'repo');
+        }
+
+        const branch = repoData.default_branch || 'main';
+
+        // 2. Upload index.html
+        currentStep = 'upload';
+        setStep('upload', 'running', 'Uploading index.html…');
+
+        let sha = null;
+        try {
+          const existing = await api(
+            `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/index.html?ref=${encodeURIComponent(branch)}`
+          );
+          sha = existing.data.sha;
+        } catch (error) {
+          if (error.status !== 404) throw error;
+        }
+
+        const contentBody = {
+          message: `Publish ${file.originalName} via Pages Pilot`,
+          content: base64EncodeUtf8(file.text),
+          branch
+        };
+        if (sha) contentBody.sha = sha;
+
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          try {
+            await api(
+              `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/index.html`,
+              { method: 'PUT', body: contentBody }
+            );
+            break;
+          } catch (error) {
+            if ((error.status === 409 || error.status === 404) && attempt < 2) {
+              await sleep(2000);
+              continue;
+            }
+            throw error;
+          }
+        }
+
+        setStep('upload', 'done', sha ? 'File updated' : 'File uploaded');
+
+        // 3. Enable Pages
+        currentStep = 'pages';
+        setStep('pages', 'running', 'Enabling GitHub Pages…');
+        const pagesData = await enablePages(owner, repo, branch);
+        const liveUrl = normalizeSiteUrl(owner, repo, pagesData && pagesData.html_url);
+        setStep('pages', 'done', 'Pages enabled');
+
+        // 4. Poll build
+        currentStep = 'build';
+        setStep('build', 'running', 'Waiting for GitHub Pages build…');
+
+        let buildState = 'building';
+        try {
+          const poll = await pollPagesBuild(owner, repo);
+          buildState = poll.status;
+          setStep('build', 'done', poll.status === 'built' ? 'Live' : 'URL ready — build in progress');
+        } catch (error) {
+          if (error instanceof RateLimitError) {
+            setStep('build', 'done', 'URL ready — build status pending');
+            buildState = 'building';
+          } else {
+            setStep('build', 'error', 'Build status unavailable');
+            buildState = 'unknown';
+          }
+        }
+
+        const deployment = {
+          id: (crypto.randomUUID && crypto.randomUUID()) || `dep-${Date.now()}`,
+          owner,
+          repo,
+          url: liveUrl,
+          fileName: file.originalName,
+          fileSize: file.size,
+          status: buildState === 'built' ? 'live' : buildState === 'errored' ? 'error' : 'building',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+
+        app.deployments = app.deployments.filter((item) => !(item.owner === owner && item.repo === repo));
+        app.deployments.unshift(deployment);
+        saveDeployments();
+        renderDeployments();
+        renderStats();
+        showDeployResult(deployment);
+        logActivity(`Deployed ${owner}/${repo} — ${liveUrl}`, 'success');
+        toast('success', `Live site ready: ${repo}`, 'Deployment complete');
+      } catch (error) {
+        console.error(error);
+        const message = explainDeployError(error);
+        setStep(currentStep, 'error', 'Failed — see alert');
+        toast('error', message, 'Deployment failed');
+        logActivity(`Deployment failed for ${owner}/${repo}: ${message}`, 'error');
+      } finally {
+        app.deploying = false;
+        setDeployBusy(false);
+      }
+    }
+
+    async function refreshDeployment(id) {
+      const deployment = app.deployments.find((item) => item.id === id);
+      if (!deployment) return;
+
+      toast('info', `Refreshing ${deployment.repo}…`);
+
+      try {
+        let pagesData = null;
+        try {
+          const response = await api(
+            `/repos/${encodeURIComponent(deployment.owner)}/${encodeURIComponent(deployment.repo)}/pages`
+          );
+          pagesData = response.data;
+        } catch (error) {
+          if (error.status !== 404) throw error;
+        }
+
+        let status = 'building';
+        try {
+          const build = await api(
+            `/repos/${encodeURIComponent(deployment.owner)}/${encodeURIComponent(deployment.repo)}/pages/builds/latest`,
+            { retries: 0 }
+          );
+          if (build.data && build.data.status === 'built') status = 'live';
+          else if (build.data && build.data.status === 'errored') status = 'error';
+        } catch (error) {
+          if (error.status !== 404) throw error;
+        }
+
+        deployment.url = normalizeSiteUrl(deployment.owner, deployment.repo, pagesData && pagesData.html_url) || deployment.url;
+        deployment.status = status;
+        deployment.updatedAt = new Date().toISOString();
+        saveDeployments();
+        renderDeployments();
+        renderStats();
+        toast('success', `${deployment.repo}: ${status}`, 'Status refreshed');
+      } catch (error) {
+        toast('error', explainDeployError(error), 'Could not refresh status');
+      }
+    }
+
+    async function deleteDeployment(id) {
+      const deployment = app.deployments.find((item) => item.id === id);
+      if (!deployment) return;
+
+      const ok = await confirmAction({
+        title: 'Remove deployment record?',
+        message: `This removes "${deployment.repo}" from this local dashboard. The GitHub repository and live Pages site are not deleted.`,
+        confirmLabel: 'Remove record'
+      });
+      if (!ok) return;
+
+      app.deployments = app.deployments.filter((item) => item.id !== id);
+      saveDeployments();
+      renderDeployments();
+      renderStats();
+      logActivity(`Removed local record for ${deployment.owner}/${deployment.repo}`, 'warning');
+      toast('success', 'Deployment record removed.');
+    }
+
+    // ============================================================
+    // SETTINGS ACTIONS
+    // (Reachable only from the admin application; every trigger in
+    //  this document carries [data-admin] and never renders here.)
+    // ============================================================
+    function saveOAuthSettings() {
+      const clientId = $('#settingClientId').value.trim();
+      const brokerUrl = $('#settingBrokerUrl').value.trim().replace(/\/+$/g, '');
+      const scope = $('#settingScope').value;
+      const remember = $('#settingRemember').checked;
+
+      if (brokerUrl && !isValidBrokerUrl(brokerUrl)) {
+        toast('error', 'Broker URL must use HTTPS. HTTP is allowed only for localhost.');
+        return;
+      }
+
+      app.config = {
+        clientId,
+        brokerUrl,
+        scope: ['public_repo', 'repo'].includes(scope) ? scope : 'public_repo',
+        remember
+      };
+      saveConfig();
+      renderAuthConfig();
+      fillSettings();
+      toast('success', 'OAuth configuration saved. You can now connect with GitHub.');
+    }
+
+    function clearLocalData() {
+      confirmAction({
+        title: 'Clear local workspace data?',
+        message: 'Deployment records and activity will be removed from this browser. GitHub repositories and Pages sites are not affected.',
+        confirmLabel: 'Clear data'
+      }).then((ok) => {
+        if (!ok) return;
+        app.deployments = [];
+        app.activity = [];
+        try {
+          localStorage.removeItem(LS_DEPLOYMENTS);
+        } catch {
+          /* ignore */
+        }
+        renderDeployments();
+        renderStats();
+        renderActivity();
+        toast('success', 'Local workspace data cleared.');
+      });
+    }
+
+    // ============================================================
+    // EVENT WIRING
+    // ============================================================
+    function bindEvents() {
+      // Auth
+      $('#authOauthBtn')?.addEventListener('click', startOAuth);
+      $('#authPatBtn')?.addEventListener('click', () => {
+        openModal('settingsModal');
+        fillSettings();
+        $('#patInput')?.focus();
+      });
+      $('#authSetupBtn')?.addEventListener('click', () => {
+        openModal('settingsModal');
+        fillSettings();
+      });
+      $('#authBrokerHelpBtn')?.addEventListener('click', () => {
+        openModal('settingsModal');
+        fillSettings();
+      });
+
+      // Sidebar
+      $('#mobileMenuBtn')?.addEventListener('click', () => {
+        $('#sidebar')?.classList.toggle('-translate-x-full');
+        $('#sidebarBackdrop')?.classList.toggle('hidden');
+      });
+      $('#sidebarBackdrop')?.addEventListener('click', () => {
+        $('#sidebar')?.classList.add('-translate-x-full');
+        $('#sidebarBackdrop')?.classList.add('hidden');
+      });
+      $$('[data-nav]').forEach((link) => {
+        link.addEventListener('click', () => {
+          if (window.innerWidth < 1024) {
+            $('#sidebar')?.classList.add('-translate-x-full');
+            $('#sidebarBackdrop')?.classList.add('hidden');
+          }
+        });
+      });
+
+      // Settings (admin-only surfaces; handlers are retained so the admin
+      // application can drive them without duplicating logic)
+      $('#saveOAuthBtn')?.addEventListener('click', saveOAuthSettings);
+      $('#connectPatBtn')?.addEventListener('click', connectPat);
+      $('#disconnectBtn')?.addEventListener('click', signOut);
+      $('#clearDataBtn')?.addEventListener('click', clearLocalData);
+      $('#copyRedirectBtn')?.addEventListener('click', async () => {
+        const ok = await copyText(redirectUri());
+        toast(ok ? 'success' : 'error', ok ? 'Redirect URI copied.' : 'Could not copy the redirect URI.');
+      });
+      $('#patInput')?.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          connectPat();
+        }
+      });
+
+      // File selection
+      const dropzone = $('#dropzone');
+      const fileInput = $('#fileInput');
+
+      dropzone?.addEventListener('click', () => fileInput?.click());
+      dropzone?.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          fileInput?.click();
+        }
+      });
+
+      ['dragenter', 'dragover'].forEach((eventName) => {
+        dropzone?.addEventListener(eventName, (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          dropzone.classList.add('border-emerald-400/60', 'bg-emerald-500/[.04]');
+        });
+      });
+      ['dragleave', 'drop'].forEach((eventName) => {
+        dropzone?.addEventListener(eventName, (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          dropzone.classList.remove('border-emerald-400/60', 'bg-emerald-500/[.04]');
+        });
+      });
+      dropzone?.addEventListener('drop', (event) => {
+        const file = event.dataTransfer?.files?.[0];
+        handleFile(file);
+      });
+
+      fileInput?.addEventListener('change', () => {
+        const file = fileInput.files?.[0];
+        handleFile(file);
+      });
+
+      $('#removeFileBtn')?.addEventListener('click', removeSelectedFile);
+      $('#generateRepoBtn')?.addEventListener('click', () => {
+        $('#repoName').value = generateRepoName();
+      });
+
+      // Deploy
+      $('#deployForm')?.addEventListener('submit', (event) => {
+        event.preventDefault();
+        deploySelected();
+      });
+
+      // Confirm modal
+      $('#confirmCancelBtn')?.addEventListener('click', () => {
+        const resolver = app.confirmResolver;
+        app.confirmResolver = null;
+        closeModal($('#confirmModal'));
+        if (resolver) resolver(false);
+      });
+      $('#confirmOkBtn')?.addEventListener('click', () => {
+        const resolver = app.confirmResolver;
+        app.confirmResolver = null;
+        closeModal($('#confirmModal'));
+        if (resolver) resolver(true);
+      });
+
+      // Generic delegation for modals, dynamic actions, and copy
+      document.addEventListener('click', async (event) => {
+        const closer = event.target.closest('[data-close]');
+        if (closer) {
+          const modal = closer.closest('.modal');
+          if (modal) closeModal(modal);
+          return;
+        }
+
+        const trigger = event.target.closest('[data-action]');
+        if (!trigger) return;
+
+        const action = trigger.dataset.action;
+
+        if (action === 'copy-url') {
+          event.preventDefault();
+          const ok = await copyText(trigger.dataset.copy || '');
+          toast(ok ? 'success' : 'error', ok ? 'URL copied to clipboard.' : 'Could not copy the URL. Select it manually.');
+          return;
+        }
+
+        if (action === 'open-url') {
+          event.preventDefault();
+          const url = trigger.dataset.url || '';
+          if (/^https:\/\//i.test(url)) {
+            window.open(url, '_blank', 'noopener,noreferrer');
+          } else {
+            toast('error', 'That URL is not a valid HTTPS address.');
+          }
+          return;
+        }
+
+        if (action === 'copy-broker-sample') {
+          event.preventDefault();
+          const sample = $('#brokerSample')?.textContent || '';
+          const ok = await copyText(sample);
+          toast(ok ? 'success' : 'error', ok ? 'Broker reference copied.' : 'Could not copy the broker reference.');
+          return;
+        }
+
+        if (action === 'open-settings') {
+          // Administrative surface — resolved by the admin application.
+          openModal('settingsModal');
+          fillSettings();
+          return;
+        }
+
+        if (action === 'open-broker') {
+          // Administrative surface — resolved by the admin application.
+          openModal('brokerModal');
+          return;
+        }
+
+        if (action === 'open-rate') {
+          openModal('rateModal');
+          return;
+        }
+
+        if (action === 'signout') {
+          signOut();
+          return;
+        }
+
+        if (action === 'refresh-deployment') {
+          refreshDeployment(trigger.dataset.id);
+          return;
+        }
+
+        if (action === 'delete-deployment') {
+          deleteDeployment(trigger.dataset.id);
+        }
+      });
+
+      // Escape closes the topmost modal
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') {
+          const open = document.querySelector('.modal:not(.hidden):not([data-admin])');
+          if (open) closeModal(open);
+        }
+      });
+
+      // Global guards
+      window.addEventListener('error', (event) => {
+        console.error(event.error || event.message);
+        safeErrorToast('The interface recovered from an unexpected error.');
+      });
+      window.addEventListener('unhandledrejection', (event) => {
+        console.error(event.reason);
+        if (event.reason && event.reason.name === 'AbortError') return;
+        safeErrorToast(event.reason && event.reason.message ? event.reason.message : 'A background operation failed.');
+      });
+      window.addEventListener('beforeunload', (event) => {
+        if (app.deploying) {
+          event.preventDefault();
+          event.returnValue = '';
+        }
+      });
+
+      // Keep relative times and rate countdown fresh
+      setInterval(() => {
+        renderRate();
+        renderDeployments();
+        renderActivity();
+      }, 30000);
+    }
+
+    // ============================================================
+    // BOOT
+    // ============================================================
+    async function init() {
+      hydrateIcons();
+      bindEvents();
+
+      // Pull the runtime configuration provisioned by the admin application
+      // before rendering any connection affordance.
+      await loadManagedConfig();
+
+      renderAuthConfig();
+      fillSettings();
+
+      const brokerSample = $('#brokerSample');
+      const brokerSource = $('#brokerSampleSource');
+      if (brokerSample && brokerSource) {
+        brokerSample.textContent = brokerSource.textContent.trim();
+      }
+
+      const params = new URLSearchParams(location.search);
+      if (params.has('code') || params.has('error')) {
+        await handleOAuthCallback(params);
+        return;
+      }
+
+      // Persistent session: prefer localStorage so the user stays signed in
+      // across app / WebView launches. The remember flag still gates storage.
+      const savedToken = tokenStorage.get();
+      if (savedToken) {
+        app.token = savedToken;
+        app.tokenSource = 'oauth';
+
+        // Pre-fill the identity from the cached record so UI (and the native
+        // WebView host, via the auth-restored message) has the user id
+        // available before the validating round-trip returns. The fresh
+        // `/user` response overwrites this on success.
+        const cachedUser = userStorage.get();
+        if (cachedUser) app.user = cachedUser;
+
+        showBoot(true, 'Restoring secure session…');
+        try {
+          await bootstrapSession();
+          // Notify WebView that the restored session is live so the host
+          // can dismiss any splash/loading UI without re-authenticating.
+          notifyWebView('auth-restored', {
+            login: (app.user && app.user.login) || '',
+            id: (app.user && app.user.id) || null,
+            name: (app.user && app.user.name) || ''
+          });
+        } catch (error) {
+          console.error(error);
+          clearSession();
+          showAuth();
+          if (!(error instanceof AuthError)) {
+            toast('warning', 'The saved session could not be restored. Reconnect to continue.');
+          }
+          notifyWebView('auth-error', { message: (error && error.message) || 'restore_failed' });
+        } finally {
+          showBoot(false);
+        }
+      } else {
+        showAuth();
+        notifyWebView('auth-ready');
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      init().catch((error) => {
+        console.error(error);
+        showAuth();
+        showBoot(false);
+        toast('error', error.message || 'The app could not start correctly.', 'Startup error');
+        notifyWebView('auth-error', { message: (error && error.message) || 'startup_failed' });
+      });
+    });
+  })();
+  </script>
+</body>
+</html>
